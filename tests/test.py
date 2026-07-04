@@ -1,3 +1,7 @@
+"""
+Smoke test — package is importable.
+"""
+
 import opencode_harness
 
 
