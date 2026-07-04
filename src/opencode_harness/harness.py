@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import shutil
 import typing as t
 from pathlib import Path
 
@@ -104,8 +106,33 @@ class OpenCodeHarness:
     # ------------------------------------------------------------------
 
     async def _prepare_runtime(self) -> None:
-        """Prepare config and materials in the runtime directory."""
-        pass
+        """Write config overlay and copy materials into runtime_dir."""
+        # Write opencode.json if config was provided
+        if self.config:
+            config_path = self.runtime_dir / "opencode.json"
+            config_path.write_text(
+                json.dumps(self.config, indent=2),
+                encoding="utf-8",
+            )
+
+        # Overlay materials into runtime_dir
+        if self.materials is not None:
+            paths = self.materials if isinstance(self.materials, list) else [self.materials]
+            for src in paths:
+                src = Path(src).resolve()
+                if not src.exists():
+                    from .exceptions import OpenCodeHarnessError
+
+                    raise OpenCodeHarnessError(f"materials path does not exist: {src}")
+                if src.is_dir():
+                    for item in src.iterdir():
+                        dest = self.runtime_dir / item.name
+                        if item.is_dir():
+                            shutil.copytree(item, dest, dirs_exist_ok=True)
+                        else:
+                            shutil.copy2(item, dest)
+                else:
+                    shutil.copy2(src, self.runtime_dir / src.name)
 
     async def _start_server(self) -> None:
         """Start the opencode server process and initialise the client."""
