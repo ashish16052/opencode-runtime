@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import os
+import secrets
 import shutil
+import socket
 import typing as t
 from pathlib import Path
 
@@ -136,11 +140,83 @@ class OpenCodeHarness:
 
     async def _start_server(self) -> None:
         """Start the opencode server process and initialise the client."""
-        pass
+        from .client import OpenCodeClient
+        from .exceptions import OpenCodeNotFoundError, OpenCodeTimeoutError
+
+        if shutil.which("opencode") is None:
+            raise OpenCodeNotFoundError(
+                "opencode binary not found on PATH. Install it with: npm install -g opencode-ai"
+            )
+
+        # Find a free port
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+
+        host = "127.0.0.1"
+        password = secrets.token_urlsafe(32)
+
+        # Build isolated environment
+        env = {
+            **os.environ,
+            "HOME": str(self.runtime_dir),
+            "TMPDIR": str(self.runtime_dir / "tmp"),
+            "OPENCODE_CONFIG_HOME": str(self.runtime_dir),
+            "OPENCODE_SERVER_PASSWORD": password,
+            **self.env,
+        }
+
+        # Ensure tmp dir exists
+        (self.runtime_dir / "tmp").mkdir(parents=True, exist_ok=True)
+
+        # Open log file
+        log_path = self.runtime_dir / "opencode.log"
+        log_file = open(log_path, "ab")
+
+        self._process = await asyncio.create_subprocess_exec(
+            "opencode",
+            "serve",
+            "--hostname",
+            host,
+            "--port",
+            str(port),
+            cwd=str(self.project_dir),
+            env=env,
+            stdout=log_file,
+            stderr=log_file,
+        )
+
+        self._client = OpenCodeClient(
+            base_url=f"http://{host}:{port}",
+            password=password,
+        )
+
+        # Health check — retry for up to 20 seconds
+        deadline = asyncio.get_event_loop().time() + 20.0
+        last_exc: Exception | None = None
+        while asyncio.get_event_loop().time() < deadline:
+            try:
+                await self._client.health()
+                return  # server is up
+            except Exception as exc:
+                last_exc = exc
+                await asyncio.sleep(0.25)
+
+        # Timed out — kill the process and raise
+        self._process.kill()
+        self._process = None
+        self._client = None
+        raise OpenCodeTimeoutError(
+            f"opencode server did not become healthy within 20s (last error: {last_exc})"
+        )
 
     async def _stop_server(self) -> None:
         """Terminate the opencode server process."""
         if self._process is not None:
             self._process.terminate()
+            try:
+                await asyncio.wait_for(self._process.wait(), timeout=5.0)
+            except asyncio.TimeoutError:
+                self._process.kill()
             self._process = None
         self._client = None
