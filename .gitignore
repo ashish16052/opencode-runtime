@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+wheels/
+
+# Virtual environments
+.venv/
+venv/
+env/
+.env/
+
+# pytest
+.pytest_cache/
+.cache/
+
+# mypy
+.mypy_cache/
+
+# ruff
+.ruff_cache/
+
+# coverage
+.coverage
+coverage.xml
+htmlcov/
+
+# Distribution / packaging
+MANIFEST
+*.tar.gz
+*.whl
+
+# opencode-harness runtime state
+.opencode-harness/
+
+# macOS
+.DS_Store
+
+# editors
+.idea/
+.vscode/
+*.swp
+*.swo
