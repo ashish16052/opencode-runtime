@@ -99,14 +99,55 @@ class OpenCodeSession:
             tools:   Per-tool enable/disable map, e.g. ``{"bash": False}``.
             system:  Additional system prompt text.
         """
-        yield OpenCodeEvent(
-            type="error",
-            text="opencode server not yet connected",
+        from .exceptions import OpenCodeServerError
+
+        client = self.raw_client
+        if client is None:
+            raise OpenCodeServerError(
+                "No opencode server running. "
+                "Use 'async with OpenCodeHarness(...) as h' to start one."
+            )
+
+        # Create an OpenCode session server-side if we don't have one yet
+        if self._oc_session_id is None:
+            result = await client.post("/session", {})
+            self._oc_session_id = result["id"]
+
+        # Narrowed local — type checker sees str, not str | None
+        oc_session_id = self._oc_session_id
+        assert oc_session_id is not None
+
+        # Subscribe to SSE stream first, then fire the message.
+        # This avoids a race where events arrive before we start listening.
+        import asyncio
+
+        send_task = asyncio.create_task(
+            client.send(
+                oc_session_id,
+                message,
+                model=model,
+                agent=agent,
+                tools=tools,
+                system=system,
+            )
         )
+
+        try:
+            async for event in client.events(oc_session_id):
+                yield event
+        finally:
+            # Ensure send task is awaited even if caller breaks early
+            if not send_task.done():
+                send_task.cancel()
+                try:
+                    await send_task
+                except (asyncio.CancelledError, Exception):
+                    pass
 
     async def abort(self) -> None:
         """Abort a running session."""
-        pass
+        if self.raw_client is not None and self._oc_session_id is not None:
+            await self.raw_client.post(f"/session/{self._oc_session_id}/abort", {})
 
     async def close(self) -> None:
         """Release conversation-level resources."""
