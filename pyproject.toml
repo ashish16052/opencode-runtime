@@ -1,0 +1,66 @@
+[project]
+name = "opencode-harness"
+version = "0.1.0"
+description = "Managed OpenCode runtimes for multi-user backend apps."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+authors = [
+  { name = "Ashish Mohite" }
+]
+keywords = [
+  "opencode",
+  "agent harness",
+  "agent runtime",
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "License :: OSI Approved :: Apache Software License",
+  "Operating System :: OS Independent",
+]
+
+dependencies = [
+  "httpx",
+]
+
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project.optional-dependencies]
+dev = [
+  "pytest",
+  "pytest-asyncio",
+  "pytest-timeout",
+  "ruff",
+  "mypy",
+  "build",
+  "twine",
+]
+
+[project.urls]
+Homepage = "https://github.com/ashish16052/opencode-harness"
+Repository = "https://github.com/ashish16052/opencode-harness"
+Issues = "https://github.com/ashish16052/opencode-harness/issues"
+
+[project.scripts]
+opencode-harness = "opencode_harness.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/opencode_harness"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+python_files = ["test.py", "test_*.py", "*_test.py"]
+timeout = 30
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
