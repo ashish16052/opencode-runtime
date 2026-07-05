@@ -99,7 +99,11 @@ async def _serve(args: argparse.Namespace) -> None:
     materials = args.materials or None
 
     key = _compute_runtime_key(
-        workspace=None, user_id=None, project_dir=project_dir, materials=materials, config={}
+        workspace=args.workspace,
+        user_id=args.user_id,
+        project_dir=project_dir,
+        materials=materials,
+        config={},
     )
 
     existing = read(key)
@@ -168,11 +172,17 @@ async def _serve(args: argparse.Namespace) -> None:
             project_dir=str(project_dir),
             server_dir=str(server_dir) if server_dir else None,
             started_at=now_iso(),
+            workspace=args.workspace,
+            user_id=args.user_id,
         )
     )
 
     print(f"\r{_green('✓ Server started')}\n")
     _row("ID", key)
+    if args.workspace:
+        _row("Workspace", args.workspace)
+    if args.user_id:
+        _row("User", args.user_id)
     _row("Status", _green("● alive"))
     _row("URL", f"http://127.0.0.1:{port}")
     _row("PID", _dim(str(process.pid)))
@@ -195,22 +205,37 @@ def cmd_serve(args: argparse.Namespace) -> None:
 
 
 def cmd_ps(_args: argparse.Namespace) -> None:
-    fmt = "  {:<18}  {:>6}  {:>6}  {:<7}  {:>8}  {}"
-    print(_cyan(fmt.format("ID", "PID", "PORT", "STATUS", "UPTIME", "PROJECT")))
-    print(_dim("  " + "─" * 70))
-    for e in list_all():
+    entries = list_all()
+    show_workspace = any(e.workspace for e in entries)
+    show_user = any(e.user_id for e in entries)
+
+    # Build format string dynamically
+    cols = ["  {:<18}", "{:>6}", "{:>6}", "{:<7}", "{:>8}"]
+    headers = ["ID", "PID", "PORT", "STATUS", "UPTIME"]
+    if show_workspace:
+        cols.append("{:<12}")
+        headers.append("WORKSPACE")
+    if show_user:
+        cols.append("{:<12}")
+        headers.append("USER")
+    cols.append("{}")
+    headers.append("PROJECT")
+    fmt = "  ".join(cols)
+
+    print(_cyan(fmt.format(*headers)))
+    print(_dim("  " + "─" * (70 + 14 * show_workspace + 14 * show_user)))
+
+    for e in entries:
         alive = is_alive(e.pid)
         status_plain = "● alive" if alive else "● dead"
         status_coloured = _green(status_plain) if alive else _red(status_plain)
-        # Use plain text in fmt for correct column width, then replace with coloured version
-        row = fmt.format(
-            e.key,
-            str(e.pid),
-            str(e.port),
-            status_plain,
-            _uptime(e.started_at, alive),
-            _home(e.project_dir),
-        )
+        vals = [e.key, str(e.pid), str(e.port), status_plain, _uptime(e.started_at, alive)]
+        if show_workspace:
+            vals.append(e.workspace or "-")
+        if show_user:
+            vals.append(e.user_id or "-")
+        vals.append(_home(e.project_dir))
+        row = fmt.format(*vals)
         row = row.replace(status_plain, status_coloured, 1)
         print(_dim(row).replace(_dim(status_coloured), status_coloured, 1))
 
@@ -306,6 +331,10 @@ def main() -> None:
         metavar="PATH",
         help="materials path(s) to overlay (repeatable)",
     )
+    p.add_argument(
+        "--workspace", default=None, metavar="NAME", help="tenant workspace identifier (optional)"
+    )
+    p.add_argument("--user-id", default=None, metavar="ID", help="user identifier (optional)")
     p.set_defaults(func=cmd_serve)
 
     p = sub.add_parser("ps", help="list tracked servers")
