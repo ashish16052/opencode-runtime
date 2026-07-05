@@ -36,13 +36,13 @@ class OpenCodeHarness:
         self,
         *,
         project_dir: str | Path = ".",
-        runtime_dir: str | Path = ".opencode-harness",
+        runtime_dir: str | Path | None = None,
         materials: str | Path | list[str | Path] | None = None,
         config: dict[str, t.Any] | None = None,
         env: dict[str, str] | None = None,
     ) -> None:
         self.project_dir = Path(project_dir).resolve()
-        self.runtime_dir = Path(runtime_dir).resolve()
+        self.runtime_dir = Path(runtime_dir).resolve() if runtime_dir else None
         self.materials = materials
         self.config = config or {}
         self.env = env or {}
@@ -63,7 +63,8 @@ class OpenCodeHarness:
 
     async def start(self) -> None:
         """Prepare the runtime directory and start the opencode server."""
-        self.runtime_dir.mkdir(parents=True, exist_ok=True)
+        if self.runtime_dir is not None:
+            self.runtime_dir.mkdir(parents=True, exist_ok=True)
         await self._prepare_runtime()
         await self._start_server()
 
@@ -110,7 +111,12 @@ class OpenCodeHarness:
     # ------------------------------------------------------------------
 
     async def _prepare_runtime(self) -> None:
-        """Write config overlay and copy materials into runtime_dir."""
+        """
+        Write config overlay and copy materials into runtime_dir.
+        """
+        if self.runtime_dir is None:
+            return
+
         # Write opencode.json if config was provided
         if self.config:
             config_path = self.runtime_dir / "opencode.json"
@@ -156,22 +162,27 @@ class OpenCodeHarness:
         host = "127.0.0.1"
         password = secrets.token_urlsafe(32)
 
-        # Build isolated environment
-        env = {
-            **os.environ,
-            "HOME": str(self.runtime_dir),
-            "TMPDIR": str(self.runtime_dir / "tmp"),
-            "OPENCODE_CONFIG_HOME": str(self.runtime_dir),
-            "OPENCODE_SERVER_PASSWORD": password,
-            **self.env,
-        }
+        # Build environment — always pass through user env overrides.
+        # Only isolate HOME/TMPDIR/OPENCODE_CONFIG_HOME when runtime_dir was
+        # explicitly set (self._isolated). Without isolation, OpenCode uses
+        # the user's real home directory and discovers config normally.
+        env = {**os.environ, **self.env}
+        env["OPENCODE_SERVER_PASSWORD"] = password
 
-        # Ensure tmp dir exists
-        (self.runtime_dir / "tmp").mkdir(parents=True, exist_ok=True)
+        if self.runtime_dir is not None:
+            env["HOME"] = str(self.runtime_dir)
+            env["TMPDIR"] = str(self.runtime_dir / "tmp")
+            env["OPENCODE_CONFIG_HOME"] = str(self.runtime_dir)
+            (self.runtime_dir / "tmp").mkdir(parents=True, exist_ok=True)
 
-        # Open log file
-        log_path = self.runtime_dir / "opencode.log"
-        log_file = open(log_path, "ab")
+        # Log file when isolated; discard output for Level 1 (user's own OpenCode)
+        if self.runtime_dir is not None:
+            log_file = open(self.runtime_dir / "opencode.log", "ab")
+            stdout = log_file
+            stderr = log_file
+        else:
+            stdout = asyncio.subprocess.DEVNULL
+            stderr = asyncio.subprocess.DEVNULL
 
         self._process = await asyncio.create_subprocess_exec(
             "opencode",
@@ -182,8 +193,8 @@ class OpenCodeHarness:
             str(port),
             cwd=str(self.project_dir),
             env=env,
-            stdout=log_file,
-            stderr=log_file,
+            stdout=stdout,
+            stderr=stderr,
         )
 
         self._client = OpenCodeClient(

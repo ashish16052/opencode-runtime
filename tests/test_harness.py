@@ -31,6 +31,7 @@ class TestHarnessLifecycle:
             runtime_dir=tmp_path / "runtime",
         )
         await h.start()
+        assert h.runtime_dir is not None
         assert h.runtime_dir.exists()
         await h.stop()
 
@@ -64,3 +65,23 @@ class TestHarnessLifecycle:
             assert h._client is not None
         assert h._process is None
         assert h._client is None
+
+
+class TestEnvIsolation:
+    async def test_server_uses_real_home(self, tmp_path):
+        """No runtime_dir — server process inherits the real HOME."""
+        async with OpenCodeHarness(project_dir=tmp_path) as h:
+            assert h._client is not None
+            health = await h._client.health()
+            assert health["healthy"] is True
+            # runtime_dir is None — no isolation was applied
+            assert h.runtime_dir is None
+
+    async def test_server_uses_isolated_home(self, tmp_path):
+        """runtime_dir is set — tmp dir is created inside it."""
+        async with OpenCodeHarness(
+            project_dir=tmp_path,
+            runtime_dir=tmp_path / "runtime",
+        ) as h:
+            assert h.runtime_dir is not None
+            assert (h.runtime_dir / "tmp").exists()
