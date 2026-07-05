@@ -8,6 +8,7 @@ Nothing here is exported in __all__.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import shutil
 import socket
@@ -94,3 +95,33 @@ async def _terminate_process(process: asyncio.subprocess.Process) -> None:
         await asyncio.wait_for(process.wait(), timeout=5.0)
     except asyncio.TimeoutError:
         process.kill()
+
+
+def _compute_runtime_key(
+    workspace: str | None,
+    user_id: str | None,
+    project_dir: Path,
+    materials: str | Path | list[str | Path] | None,
+    config: dict[str, Any],
+) -> str:
+    """Compute a stable 16-char key for a unique server configuration.
+
+    Same inputs always produce the same key. Different inputs (different
+    workspace, user, materials, or config) produce different keys and
+    therefore get separate server processes.
+    """
+    payload = "|".join(
+        [
+            workspace or "",
+            user_id or "",
+            str(project_dir),
+            repr(
+                sorted(
+                    str(m)
+                    for m in (materials if isinstance(materials, list) else [materials or ""])
+                )
+            ),
+            json.dumps(config, sort_keys=True, default=str),
+        ]
+    )
+    return hashlib.sha256(payload.encode()).hexdigest()[:16]
