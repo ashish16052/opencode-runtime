@@ -98,11 +98,19 @@ def _prepare_dir(
 
 async def _terminate_process(process: asyncio.subprocess.Process) -> None:
     """Terminate a process gracefully, kill if it doesn't exit within 5s."""
-    process.terminate()
+    if process.returncode is not None:
+        return  # already exited
+    try:
+        process.terminate()
+    except ProcessLookupError:
+        return  # already dead
     try:
         await asyncio.wait_for(process.wait(), timeout=5.0)
     except asyncio.TimeoutError:
-        process.kill()
+        try:
+            process.kill()
+        except ProcessLookupError:
+            pass
 
 
 def _compute_runtime_key(
