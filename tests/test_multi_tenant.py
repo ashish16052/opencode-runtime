@@ -10,13 +10,15 @@ No model or agent calls — no API keys required.
 
 import pytest
 
+import opencode_harness.registry as registry
 from opencode_harness import OpenCodeHarness
 
 pytestmark = pytest.mark.asyncio
 
 
 @pytest.fixture
-async def harness(tmp_path):
+async def harness(tmp_path, monkeypatch):
+    monkeypatch.setattr(registry, "REGISTRY_DIR", tmp_path / "reg")
     h = OpenCodeHarness(
         project_dir=tmp_path,
         runtime_dir=tmp_path / "runtime",
@@ -31,26 +33,25 @@ class TestWorkspaceIsolation:
         """Two different workspaces → two separate server processes."""
         s1 = await harness.session(workspace="acme")
         s2 = await harness.session(workspace="beta")
-        assert s1.raw_client is not s2.raw_client
         assert s1.raw_client.base_url != s2.raw_client.base_url
 
     async def test_same_workspace_reuses_server(self, harness):
-        """Same workspace → same server process reused."""
+        """Same workspace → same server (same port)."""
         s1 = await harness.session(workspace="acme")
         s2 = await harness.session(workspace="acme")
-        assert s1.raw_client is s2.raw_client
+        assert s1.raw_client.base_url == s2.raw_client.base_url
 
     async def test_different_user_gets_different_server(self, harness):
         """Same workspace, different user_id → different server."""
         s1 = await harness.session(workspace="acme", user_id="u_1")
         s2 = await harness.session(workspace="acme", user_id="u_2")
-        assert s1.raw_client is not s2.raw_client
+        assert s1.raw_client.base_url != s2.raw_client.base_url
 
     async def test_same_workspace_and_user_reuses_server(self, harness):
         """Same workspace + user_id → same server."""
         s1 = await harness.session(workspace="acme", user_id="u_1")
         s2 = await harness.session(workspace="acme", user_id="u_1")
-        assert s1.raw_client is s2.raw_client
+        assert s1.raw_client.base_url == s2.raw_client.base_url
 
     async def test_different_config_gets_different_server(self, harness):
         """Same workspace, different config → different server."""
@@ -58,7 +59,7 @@ class TestWorkspaceIsolation:
         s2 = await harness.session(
             workspace="acme", config={"model": "anthropic/claude-sonnet-4-5"}
         )
-        assert s1.raw_client is not s2.raw_client
+        assert s1.raw_client.base_url != s2.raw_client.base_url
 
 
 class TestServerDirs:
@@ -79,24 +80,29 @@ class TestServerDirs:
 
 
 class TestStopBehaviour:
-    async def test_stop_all_terminates_all_tenant_servers(self, tmp_path):
+    async def test_stop_all_terminates_all_tenant_servers(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(registry, "REGISTRY_DIR", tmp_path / "reg")
         async with OpenCodeHarness(
             project_dir=tmp_path,
             runtime_dir=tmp_path / "runtime",
         ) as h:
             await h.session(workspace="acme")
             await h.session(workspace="beta")
-            processes = [s.process for s in h._server_manager._servers.values()]
-            assert len(processes) == 3  # default + acme + beta
+            entries = registry.list_all()
+            assert len(entries) == 3  # default + acme + beta
+            pids = [e.pid for e in entries]
 
         # All terminated after context manager exit
-        assert all(p.returncode is not None for p in processes)
+        assert all(not registry.is_alive(pid) for pid in pids)
+        assert registry.list_all() == []
 
-    async def test_stop_single_tenant(self, tmp_path):
+    async def test_stop_single_tenant(self, tmp_path, monkeypatch):
         """Stopping one tenant server leaves others running."""
-        from opencode_harness.server import _compute_runtime_key
         from pathlib import Path
 
+        from opencode_harness.server import _compute_runtime_key
+
+        monkeypatch.setattr(registry, "REGISTRY_DIR", tmp_path / "reg")
         async with OpenCodeHarness(
             project_dir=tmp_path,
             runtime_dir=tmp_path / "runtime",
@@ -107,9 +113,14 @@ class TestStopBehaviour:
             acme_key = _compute_runtime_key("acme", None, Path(tmp_path), None, {})
             beta_key = _compute_runtime_key("beta", None, Path(tmp_path), None, {})
 
-            acme_process = h._server_manager._servers[acme_key].process
+            acme_entry = registry.read(acme_key)
+            beta_entry = registry.read(beta_key)
+            assert acme_entry is not None
+            assert beta_entry is not None
+
             await h._server_manager.stop(acme_key)
 
-            assert acme_process.returncode is not None
-            assert beta_key in h._server_manager._servers
-            assert h._server_manager._servers[beta_key].process.returncode is None
+            assert registry.read(acme_key) is None
+            assert not registry.is_alive(acme_entry.pid)
+            assert registry.read(beta_key) is not None
+            assert registry.is_alive(beta_entry.pid)

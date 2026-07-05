@@ -3,6 +3,8 @@ Tests for internal server helpers — no opencode binary required.
 Tests for ServerManager — require the real opencode binary.
 """
 
+import os
+import signal
 from pathlib import Path
 
 import opencode_harness.registry as registry
@@ -89,11 +91,14 @@ class TestServerManager:
             config={},
             env={},
         )
-        assert server.process.returncode is None  # still running
+        entry = registry.read(key)
+        assert entry is not None
+        assert registry.is_alive(entry.pid)
         assert server.client is not None
         await manager.stop_all()
 
     async def test_same_key_reuses_server(self, tmp_path):
+        """Same key → same server (same port in registry)."""
         manager = ServerManager()
         key = _compute_runtime_key(None, None, tmp_path, None, {})
         s1 = await manager.get_or_start(
@@ -112,7 +117,7 @@ class TestServerManager:
             config={},
             env={},
         )
-        assert s1 is s2
+        assert s1.client.base_url == s2.client.base_url
         await manager.stop_all()
 
     async def test_different_key_starts_different_server(self, tmp_path):
@@ -135,7 +140,6 @@ class TestServerManager:
             config={},
             env={},
         )
-        assert s1 is not s2
         assert s1.client.base_url != s2.client.base_url
         await manager.stop_all()
 
@@ -143,7 +147,9 @@ class TestServerManager:
         manager = ServerManager()
         k1 = _compute_runtime_key("acme", None, tmp_path, None, {})
         k2 = _compute_runtime_key("beta", None, tmp_path, None, {})
-        s1 = await manager.get_or_start(
+        e1_before = None
+        e2_before = None
+        await manager.get_or_start(
             key=k1,
             project_dir=tmp_path,
             server_dir=tmp_path / "acme",
@@ -151,7 +157,7 @@ class TestServerManager:
             config={},
             env={},
         )
-        s2 = await manager.get_or_start(
+        await manager.get_or_start(
             key=k2,
             project_dir=tmp_path,
             server_dir=tmp_path / "beta",
@@ -159,11 +165,17 @@ class TestServerManager:
             config={},
             env={},
         )
-        p1, p2 = s1.process, s2.process
+        e1_before = registry.read(k1)
+        e2_before = registry.read(k2)
+        assert e1_before is not None
+        assert e2_before is not None
+
         await manager.stop_all()
-        assert len(manager._servers) == 0
-        assert p1.returncode is not None
-        assert p2.returncode is not None
+
+        assert not registry.is_alive(e1_before.pid)
+        assert not registry.is_alive(e2_before.pid)
+        assert registry.read(k1) is None
+        assert registry.read(k2) is None
 
     async def test_server_dir_created(self, tmp_path):
         manager = ServerManager()
@@ -187,7 +199,7 @@ class TestServerManager:
         manager = ServerManager()
         k1 = _compute_runtime_key("acme", None, tmp_path, None, {})
         k2 = _compute_runtime_key("beta", None, tmp_path, None, {})
-        s1 = await manager.get_or_start(
+        await manager.get_or_start(
             key=k1,
             project_dir=tmp_path,
             server_dir=tmp_path / "acme",
@@ -195,7 +207,7 @@ class TestServerManager:
             config={},
             env={},
         )
-        s2 = await manager.get_or_start(
+        await manager.get_or_start(
             key=k2,
             project_dir=tmp_path,
             server_dir=tmp_path / "beta",
@@ -203,11 +215,16 @@ class TestServerManager:
             config={},
             env={},
         )
+        e1 = registry.read(k1)
+        e2 = registry.read(k2)
+        assert e1 is not None
+        assert e2 is not None
+
         await manager.stop(k1)
-        assert k1 not in manager._servers
-        assert s1.process.returncode is not None  # terminated
-        assert k2 in manager._servers
-        assert s2.process.returncode is None  # still running
+        assert registry.read(k1) is None
+        assert not registry.is_alive(e1.pid)
+        assert registry.read(k2) is not None  # still running
+        assert registry.is_alive(e2.pid)
         await manager.stop_all()
 
     async def test_stop_nonexistent_key_is_noop(self, tmp_path):
@@ -231,7 +248,7 @@ class TestServerManagerRegistry:
         )
         entry = registry.read(key)
         assert entry is not None
-        assert entry.pid == server.process.pid
+        assert registry.is_alive(entry.pid)
         assert entry.port == int(server.client.base_url.split(":")[-1])
         await manager.stop_all()
 
@@ -262,8 +279,10 @@ class TestServerManagerRegistry:
             config={},
             env={},
         )
+        e1 = registry.read(key)
+        assert e1 is not None
 
-        # Second manager sees the registry entry and attaches
+        # Second manager sees the registry entry and attaches to the same port
         manager2 = ServerManager()
         s2 = await manager2.get_or_start(
             key=key,
@@ -273,14 +292,14 @@ class TestServerManagerRegistry:
             config={},
             env={},
         )
-        assert s2.process is None  # attached, not owned
         assert s2.client.base_url == s1.client.base_url  # same server
 
-        # manager2 stop detaches only — registry and process intact
+        # manager2 stop kills the process and deletes registry
         await manager2.stop(key)
-        assert registry.read(key) is not None
-        assert registry.is_alive(s1.process.pid)
+        assert registry.read(key) is None
+        assert not registry.is_alive(e1.pid)
 
+        # manager1 stop is now a no-op (already gone)
         await manager1.stop_all()
 
     async def test_stale_registry_entry_cleaned_on_attach(self, tmp_path, monkeypatch):
@@ -310,13 +329,12 @@ class TestServerManagerRegistry:
             config={},
             env={},
         )
-        # Fresh server was spawned — process is real and alive
-        assert server.process is not None
-        assert server.process.returncode is None
-        # New registry entry has the correct PID
+        # Fresh server was spawned — registry has a new alive entry
         entry = registry.read(key)
         assert entry is not None
-        assert entry.pid == server.process.pid
+        assert registry.is_alive(entry.pid)
+        assert entry.pid != 99999999
+        assert entry.port == int(server.client.base_url.split(":")[-1])
         await manager.stop_all()
 
     async def test_start_stores_workspace_and_user_id(self, tmp_path, monkeypatch):
@@ -337,4 +355,41 @@ class TestServerManagerRegistry:
         assert entry is not None
         assert entry.workspace == "org_a"
         assert entry.user_id == "u_1"
+        await manager.stop_all()
+
+    async def test_server_restarted_after_external_kill(self, tmp_path, monkeypatch):
+        """If registry entry is deleted externally, next call starts a fresh server."""
+        monkeypatch.setattr(registry, "REGISTRY_DIR", tmp_path / "reg")
+        manager = ServerManager()
+        key = _compute_runtime_key(None, None, tmp_path, None, {})
+        s1 = await manager.get_or_start(
+            key=key,
+            project_dir=tmp_path,
+            server_dir=tmp_path / "srv",
+            materials=None,
+            config={},
+            env={},
+        )
+        old_entry = registry.read(key)
+        assert old_entry is not None
+        old_pid = old_entry.pid
+
+        # Simulate CLI stop-all: kill process + delete registry entry
+        os.kill(old_pid, signal.SIGTERM)
+        await s1.process.wait()
+        registry.delete(key)
+
+        # Next call should start a fresh server
+        await manager.get_or_start(
+            key=key,
+            project_dir=tmp_path,
+            server_dir=tmp_path / "srv",
+            materials=None,
+            config={},
+            env={},
+        )
+        new_entry = registry.read(key)
+        assert new_entry is not None
+        assert new_entry.pid != old_pid
+        assert registry.is_alive(new_entry.pid)
         await manager.stop_all()
