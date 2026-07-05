@@ -122,6 +122,8 @@ class OpenCodeHarness:
             materials=effective_materials,
             config=effective_config,
             env=effective_env,
+            workspace=workspace,
+            user_id=user_id,
         )
 
         return OpenCodeSession(
