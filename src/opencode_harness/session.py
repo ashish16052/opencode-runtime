@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import typing as t
 
 from .event import OpenCodeEvent
@@ -104,27 +103,20 @@ class OpenCodeSession:
         oc_session_id = self._oc_session_id
         assert oc_session_id is not None
 
-        send_task = asyncio.create_task(
-            self._client.send(
-                oc_session_id,
-                message,
-                model=model,
-                agent=agent,
-                tools=tools,
-                system=system,
-            )
+        # Send the prompt first — prompt_async returns immediately once the
+        # server has accepted the message. Starting the SSE stream before
+        # send() completes means we risk missing early events.
+        await self._client.send(
+            oc_session_id,
+            message,
+            model=model,
+            agent=agent,
+            tools=tools,
+            system=system,
         )
 
-        try:
-            async for event in self._client.events(oc_session_id):
-                yield event
-        finally:
-            if not send_task.done():
-                send_task.cancel()
-                try:
-                    await send_task
-                except (asyncio.CancelledError, Exception):
-                    pass
+        async for event in self._client.events(oc_session_id):
+            yield event
 
     async def abort(self) -> None:
         """Abort a running session."""
