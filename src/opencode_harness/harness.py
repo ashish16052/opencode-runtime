@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import secrets
 import shutil
-import socket
 import typing as t
 from pathlib import Path
+
+from .server import _find_free_port, _prepare_dir, _terminate_process, _wait_healthy
 
 if t.TYPE_CHECKING:
     from .client import OpenCodeClient
@@ -111,61 +111,29 @@ class OpenCodeHarness:
     # ------------------------------------------------------------------
 
     async def _prepare_runtime(self) -> None:
-        """
-        Write config overlay and copy materials into runtime_dir.
+        """Write config overlay and copy materials into runtime_dir.
+
+        Only runs when runtime_dir is set — without it OpenCode discovers
+        config from its native XDG paths.
         """
         if self.runtime_dir is None:
             return
-
-        # Write opencode.json if config was provided
-        if self.config:
-            config_path = self.runtime_dir / "opencode.json"
-            config_path.write_text(
-                json.dumps(self.config, indent=2),
-                encoding="utf-8",
-            )
-
-        # Overlay materials into runtime_dir
-        if self.materials is not None:
-            paths = self.materials if isinstance(self.materials, list) else [self.materials]
-            for src in paths:
-                src = Path(src).resolve()
-                if not src.exists():
-                    from .exceptions import OpenCodeHarnessError
-
-                    raise OpenCodeHarnessError(f"materials path does not exist: {src}")
-                if src.is_dir():
-                    for item in src.iterdir():
-                        dest = self.runtime_dir / item.name
-                        if item.is_dir():
-                            shutil.copytree(item, dest, dirs_exist_ok=True)
-                        else:
-                            shutil.copy2(item, dest)
-                else:
-                    shutil.copy2(src, self.runtime_dir / src.name)
+        _prepare_dir(self.runtime_dir, self.config, self.materials)
 
     async def _start_server(self) -> None:
         """Start the opencode server process and initialise the client."""
         from .client import OpenCodeClient
-        from .exceptions import OpenCodeNotFoundError, OpenCodeTimeoutError
+        from .exceptions import OpenCodeNotFoundError
 
         if shutil.which("opencode") is None:
             raise OpenCodeNotFoundError(
                 "opencode binary not found on PATH. Install it with: npm install -g opencode-ai"
             )
 
-        # Find a free port
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.bind(("127.0.0.1", 0))
-            port = s.getsockname()[1]
-
+        port = _find_free_port()
         host = "127.0.0.1"
         password = secrets.token_urlsafe(32)
 
-        # Build environment — always pass through user env overrides.
-        # Only isolate HOME/TMPDIR/OPENCODE_CONFIG_HOME when runtime_dir was
-        # explicitly set (self._isolated). Without isolation, OpenCode uses
-        # the user's real home directory and discovers config normally.
         env = {**os.environ, **self.env}
         env["OPENCODE_SERVER_PASSWORD"] = password
 
@@ -175,7 +143,6 @@ class OpenCodeHarness:
             env["OPENCODE_CONFIG_HOME"] = str(self.runtime_dir)
             (self.runtime_dir / "tmp").mkdir(parents=True, exist_ok=True)
 
-        # Log file when isolated; discard output for Level 1 (user's own OpenCode)
         if self.runtime_dir is not None:
             log_file = open(self.runtime_dir / "opencode.log", "ab")
             stdout = log_file
@@ -202,32 +169,17 @@ class OpenCodeHarness:
             password=password,
         )
 
-        # Health check — retry for up to 20 seconds
-        deadline = asyncio.get_event_loop().time() + 20.0
-        last_exc: Exception | None = None
-        while asyncio.get_event_loop().time() < deadline:
-            try:
-                await self._client.health()
-                return  # server is up
-            except Exception as exc:
-                last_exc = exc
-                await asyncio.sleep(0.25)
-
-        # Timed out — kill the process and raise
-        self._process.kill()
-        self._process = None
-        self._client = None
-        raise OpenCodeTimeoutError(
-            f"opencode server did not become healthy within 20s (last error: {last_exc})"
-        )
+        try:
+            await _wait_healthy(self._client)
+        except Exception:
+            self._process.kill()
+            self._process = None
+            self._client = None
+            raise
 
     async def _stop_server(self) -> None:
         """Terminate the opencode server process."""
         if self._process is not None:
-            self._process.terminate()
-            try:
-                await asyncio.wait_for(self._process.wait(), timeout=5.0)
-            except asyncio.TimeoutError:
-                self._process.kill()
+            await _terminate_process(self._process)
             self._process = None
         self._client = None
