@@ -23,7 +23,7 @@ import asyncio
 from opencode_harness import OpenCodeHarness
 
 async def main():
-    async with OpenCodeHarness(project_dir=".") as h:
+    async with OpenCodeHarness() as h:
         session = await h.session()
         response = await session.ask("Explain this repo")
         print(response.text)
@@ -37,7 +37,6 @@ Pass a raw `opencode.json` dict to control model, permissions, and any other Ope
 
 ```python
 async with OpenCodeHarness(
-    project_dir=".",
     config={"model": "anthropic/claude-sonnet-4-5", "permission": {"bash": "deny"}},
 ) as h:
     session = await h.session()
@@ -49,21 +48,18 @@ async with OpenCodeHarness(
 Pass a directory of OpenCode-native files — `AGENTS.md`, `opencode.json`, `.opencode/skills/`, etc. — and they are copied into the server before it starts:
 
 ```python
-async with OpenCodeHarness(
-    project_dir=".",
-    materials="./opencode-materials",
-) as h:
+async with OpenCodeHarness(materials="./opencode-materials") as h:
     session = await h.session()
     print((await session.ask("Follow the instructions in AGENTS.md")).text)
 ```
 
 ### Isolation
 
-Set `runtime_dir` to give the server its own `HOME`, config, and conversation history — separate from your real environment:
+Set `project_dir` and `runtime_dir` to give the server its own `HOME`, config, and conversation history — separate from your real environment:
 
 ```python
 async with OpenCodeHarness(
-    project_dir=".",
+    project_dir="/path/to/project",
     runtime_dir=".opencode-harness",
     materials="./opencode-materials",
 ) as h:
@@ -76,7 +72,7 @@ async with OpenCodeHarness(
 Each unique `user_id` gets its own isolated server and conversation history:
 
 ```python
-async with OpenCodeHarness(project_dir=".", runtime_dir=".opencode-harness") as h:
+async with OpenCodeHarness(runtime_dir=".opencode-harness") as h:
     session = await h.session(user_id="u_1")
     print((await session.ask("What does this project do?")).text)
 ```
@@ -86,7 +82,7 @@ async with OpenCodeHarness(project_dir=".", runtime_dir=".opencode-harness") as 
 Add `workspace` to isolate by tenant. Different `(workspace, user_id)` → different server. Same combination → server reused:
 
 ```python
-async with OpenCodeHarness(project_dir=".", runtime_dir=".opencode-harness") as h:
+async with OpenCodeHarness(runtime_dir=".opencode-harness") as h:
     s1 = await h.session(workspace="org_a", user_id="u_1")
     s2 = await h.session(workspace="org_b", user_id="u_2")
     r1 = await s1.ask("What does this project do?")
@@ -126,7 +122,7 @@ async with OpenCodeHarness() as h:
 Access any OpenCode server endpoint directly:
 
 ```python
-async with OpenCodeHarness(project_dir=".") as h:
+async with OpenCodeHarness() as h:
     session = await h.session()
     agents = await session.raw_client.get("/agent")
     mcp    = await session.raw_client.get("/mcp")
@@ -164,8 +160,8 @@ The server runs in the background. Use `ps`, `stop`, and `health` to manage it.
 Each unique `(workspace, user-id)` combination gets its own isolated server:
 
 ```sh
-opencode-harness serve  --workspace org_a --user-id u_1
-opencode-harness serve  --workspace org_b --user-id u_2
+opencode-harness serve --workspace org_a --user-id u_1
+opencode-harness serve --workspace org_b --user-id u_2
 ```
 
 ### List servers

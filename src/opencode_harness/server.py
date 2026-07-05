@@ -27,7 +27,7 @@ class _ManagedServer:
     """A running opencode server process tracked by the harness."""
 
     key: str
-    process: asyncio.subprocess.Process
+    process: asyncio.subprocess.Process | None  # None = attached to external process, not owned
     client: OpenCodeClient
     server_dir: Path | None  # None when runtime_dir is not set (no isolation)
 
@@ -163,9 +163,34 @@ class ServerManager:
         materials: str | Path | list[str | Path] | None,
         config: dict[str, Any],
         env: dict[str, str],
+        workspace: str | None = None,
+        user_id: str | None = None,
     ) -> _ManagedServer:
         """Return the running server for key, starting one if needed."""
         if key not in self._servers:
+            from .registry import delete as registry_delete
+            from .registry import is_alive
+            from .registry import read as registry_read
+
+            existing = registry_read(key)
+            if existing is not None:
+                if is_alive(existing.pid):
+                    from .client import OpenCodeClient
+
+                    client = OpenCodeClient(
+                        base_url=f"http://127.0.0.1:{existing.port}",
+                        password=existing.password,
+                    )
+                    self._servers[key] = _ManagedServer(
+                        key=key,
+                        process=None,
+                        client=client,
+                        server_dir=Path(existing.server_dir) if existing.server_dir else None,
+                    )
+                    return self._servers[key]
+                else:
+                    registry_delete(key)  # stale entry — fall through to _start()
+
             self._servers[key] = await self._start(
                 key=key,
                 project_dir=project_dir,
@@ -173,14 +198,22 @@ class ServerManager:
                 materials=materials,
                 config=config,
                 env=env,
+                workspace=workspace,
+                user_id=user_id,
             )
         return self._servers[key]
 
     async def stop(self, key: str) -> None:
         """Terminate the server for the given key. No-op if not running."""
+        from .registry import delete as registry_delete
+
         server = self._servers.pop(key, None)
         if server is not None:
-            await _terminate_process(server.process)
+            if server.process is not None:
+                # Owned — we started it, we kill it and clean the registry
+                await _terminate_process(server.process)
+                registry_delete(key)
+            # else: attached to external process — detach only, leave process and registry intact
 
     async def stop_all(self) -> None:
         """Terminate all managed server processes."""
@@ -196,6 +229,8 @@ class ServerManager:
         materials: str | Path | list[str | Path] | None,
         config: dict[str, Any],
         env: dict[str, str],
+        workspace: str | None = None,
+        user_id: str | None = None,
     ) -> _ManagedServer:
         """Start a new opencode server and return a _ManagedServer."""
         from .client import OpenCodeClient
@@ -261,6 +296,23 @@ class ServerManager:
         except Exception:
             await _terminate_process(process)
             raise
+
+        from .registry import RegistryEntry, now_iso
+        from .registry import write as registry_write
+
+        registry_write(
+            RegistryEntry(
+                key=key,
+                pid=process.pid,
+                port=port,
+                password=password,
+                project_dir=str(project_dir),
+                server_dir=str(server_dir) if server_dir else None,
+                started_at=now_iso(),
+                workspace=workspace,
+                user_id=user_id,
+            )
+        )
 
         return _ManagedServer(
             key=key,
