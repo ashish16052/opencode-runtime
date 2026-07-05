@@ -29,15 +29,31 @@ from .registry import RegistryEntry, delete, is_alive, list_all, now_iso, read, 
 
 _R = "\033[0m"
 
-def _green(s: str)  -> str: return f"\033[32m{s}{_R}"
-def _yellow(s: str) -> str: return f"\033[33m{s}{_R}"
-def _red(s: str)    -> str: return f"\033[31m{s}{_R}"
-def _cyan(s: str)   -> str: return f"\033[36m{s}{_R}"
-def _dim(s: str)    -> str: return f"\033[2m{s}{_R}"
+
+def _green(s: str) -> str:
+    return f"\033[32m{s}{_R}"
+
+
+def _yellow(s: str) -> str:
+    return f"\033[33m{s}{_R}"
+
+
+def _red(s: str) -> str:
+    return f"\033[31m{s}{_R}"
+
+
+def _cyan(s: str) -> str:
+    return f"\033[36m{s}{_R}"
+
+
+def _dim(s: str) -> str:
+    return f"\033[2m{s}{_R}"
+
 
 # ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
+
 
 def _home(path: str) -> str:
     try:
@@ -48,7 +64,13 @@ def _home(path: str) -> str:
 
 def _uptime(started_at: str, alive: bool) -> str:
     try:
-        mins = max(0, int((datetime.now(timezone.utc) - datetime.fromisoformat(started_at)).total_seconds() // 60))
+        mins = max(
+            0,
+            int(
+                (datetime.now(timezone.utc) - datetime.fromisoformat(started_at)).total_seconds()
+                // 60
+            ),
+        )
     except Exception:
         return "?"
     return f"Up {mins}m" if alive else f"Dead {mins}m"
@@ -68,7 +90,9 @@ async def _serve(args: argparse.Namespace) -> None:
     from .server import _compute_runtime_key, _find_free_port, _prepare_dir, _terminate_process
 
     if shutil.which("opencode") is None:
-        sys.exit(_red("✗ opencode binary not found on PATH\n  Install with: npm install -g opencode-ai"))
+        sys.exit(
+            _red("✗ opencode binary not found on PATH\n  Install with: npm install -g opencode-ai")
+        )
 
     project_dir = Path(args.project_dir).resolve()
     runtime_dir = Path(args.runtime_dir).resolve() if args.runtime_dir else None
@@ -99,12 +123,24 @@ async def _serve(args: argparse.Namespace) -> None:
 
     env = {**os.environ, "OPENCODE_SERVER_PASSWORD": password}
     if server_dir is not None:
-        env.update(HOME=str(server_dir), TMPDIR=str(server_dir / "tmp"), OPENCODE_CONFIG_HOME=str(server_dir))
+        env.update(
+            HOME=str(server_dir),
+            TMPDIR=str(server_dir / "tmp"),
+            OPENCODE_CONFIG_HOME=str(server_dir),
+        )
 
     log = open(server_dir / "opencode.log", "ab") if server_dir else asyncio.subprocess.DEVNULL
     process = await asyncio.create_subprocess_exec(
-        "opencode", "serve", "--hostname", "127.0.0.1", "--port", str(port),
-        cwd=str(project_dir), env=env, stdout=log, stderr=log,
+        "opencode",
+        "serve",
+        "--hostname",
+        "127.0.0.1",
+        "--port",
+        str(port),
+        cwd=str(project_dir),
+        env=env,
+        stdout=log,
+        stderr=log,
     )
 
     client = OpenCodeClient(base_url=f"http://127.0.0.1:{port}", password=password)
@@ -123,18 +159,23 @@ async def _serve(args: argparse.Namespace) -> None:
         await _terminate_process(process)
         sys.exit(_red("✗ Server did not become healthy within 60s"))
 
-    write(RegistryEntry(
-        key=key, pid=process.pid, port=port, password=password,
-        project_dir=str(project_dir),
-        server_dir=str(server_dir) if server_dir else None,
-        started_at=now_iso(),
-    ))
+    write(
+        RegistryEntry(
+            key=key,
+            pid=process.pid,
+            port=port,
+            password=password,
+            project_dir=str(project_dir),
+            server_dir=str(server_dir) if server_dir else None,
+            started_at=now_iso(),
+        )
+    )
 
     print(f"\r{_green('✓ Server started')}\n")
-    _row("ID",      key)
-    _row("Status",  _green("● alive"))
-    _row("URL",     f"http://127.0.0.1:{port}")
-    _row("PID",     _dim(str(process.pid)))
+    _row("ID", key)
+    _row("Status", _green("● alive"))
+    _row("URL", f"http://127.0.0.1:{port}")
+    _row("PID", _dim(str(process.pid)))
     _row("Project", _dim(_home(str(project_dir))))
     print()
     print(_dim(f"  opencode-harness health {key}"))
@@ -162,7 +203,14 @@ def cmd_ps(_args: argparse.Namespace) -> None:
         status_plain = "● alive" if alive else "● dead"
         status_coloured = _green(status_plain) if alive else _red(status_plain)
         # Use plain text in fmt for correct column width, then replace with coloured version
-        row = fmt.format(e.key, str(e.pid), str(e.port), status_plain, _uptime(e.started_at, alive), _home(e.project_dir))
+        row = fmt.format(
+            e.key,
+            str(e.pid),
+            str(e.port),
+            status_plain,
+            _uptime(e.started_at, alive),
+            _home(e.project_dir),
+        )
         row = row.replace(status_plain, status_coloured, 1)
         print(_dim(row).replace(_dim(status_coloured), status_coloured, 1))
 
@@ -184,7 +232,7 @@ def cmd_stop(args: argparse.Namespace) -> None:
     delete(entry.key)
 
     print(f"{_green('✓ Server stopped')}\n")
-    _row("ID",  entry.key)
+    _row("ID", entry.key)
     _row("PID", _dim(str(entry.pid)))
 
 
@@ -239,14 +287,25 @@ def cmd_health(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(prog="opencode-harness", description="Manage opencode server processes.")
+    parser = argparse.ArgumentParser(
+        prog="opencode-harness", description="Manage opencode server processes."
+    )
     sub = parser.add_subparsers(dest="command", metavar="<command>")
     sub.required = True
 
     p = sub.add_parser("serve", help="start an opencode server (detached)")
-    p.add_argument("--project-dir", default=".", metavar="DIR", help="project directory (default: .)")
-    p.add_argument("--runtime-dir", default=None, metavar="DIR", help="isolated runtime directory (optional)")
-    p.add_argument("--materials", action="append", metavar="PATH", help="materials path(s) to overlay (repeatable)")
+    p.add_argument(
+        "--project-dir", default=".", metavar="DIR", help="project directory (default: .)"
+    )
+    p.add_argument(
+        "--runtime-dir", default=None, metavar="DIR", help="isolated runtime directory (optional)"
+    )
+    p.add_argument(
+        "--materials",
+        action="append",
+        metavar="PATH",
+        help="materials path(s) to overlay (repeatable)",
+    )
     p.set_defaults(func=cmd_serve)
 
     p = sub.add_parser("ps", help="list tracked servers")

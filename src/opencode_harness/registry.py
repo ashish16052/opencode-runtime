@@ -27,6 +27,8 @@ class RegistryEntry:
     project_dir: str
     server_dir: str | None
     started_at: str  # ISO-8601
+    workspace: str | None = None
+    user_id: str | None = None
 
 
 def write(entry: RegistryEntry) -> None:
