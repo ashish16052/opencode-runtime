@@ -147,6 +147,58 @@ async with OpenCodeHarness() as h:
             print(event.text, end="", flush=True)
 ```
 
+## CLI
+
+`opencode-harness` ships with a CLI for managing server processes directly from the terminal.
+
+### Start a server
+
+```sh
+opencode-harness serve
+```
+
+The server runs in the background. Use `ps`, `stop`, and `health` to manage it.
+
+### Multi-tenant
+
+Each unique `(workspace, user-id)` combination gets its own isolated server:
+
+```sh
+opencode-harness serve  --workspace org_a --user-id u_1
+opencode-harness serve  --workspace org_b --user-id u_2
+```
+
+### List servers
+
+```sh
+opencode-harness ps
+```
+
+```
+  ID                  PID    PORT    STATUS     UPTIME    WORKSPACE   USER    PROJECT
+  ──────────────────────────────────────────────────────────────────────────────────
+  39dce5beb4debfaa   12051   58409   ● alive    Up 5m     org_a       u_1     ~/Developer/myproject
+  81fa29acb3e9210f   12088   58411   ● alive    Up 3m     org_b       u_2     ~/Developer/myproject
+```
+
+### Check health
+
+```sh
+opencode-harness health 39dce5beb4debfaa
+```
+
+### Stop a server
+
+```sh
+opencode-harness stop 39dce5beb4debfaa
+```
+
+### Stop all servers
+
+```sh
+opencode-harness stop-all
+```
+
 ## Requirements
 
 - Python 3.10+
