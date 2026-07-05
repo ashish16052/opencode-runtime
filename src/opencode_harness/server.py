@@ -27,7 +27,7 @@ class _ManagedServer:
     """A running opencode server process tracked by the harness."""
 
     key: str
-    process: asyncio.subprocess.Process | None  # None = attached to external process, not owned
+    process: asyncio.subprocess.Process | None  # set during _start(); None from get_or_start()
     client: OpenCodeClient
     server_dir: Path | None  # None when runtime_dir is not set (no isolation)
 
@@ -149,10 +149,11 @@ class ServerManager:
     Each unique combination of workspace, user_id, project_dir, materials,
     and config gets its own isolated server process. Servers are started on
     demand and reused when the same key is requested again.
-    """
 
-    def __init__(self) -> None:
-        self._servers: dict[str, _ManagedServer] = {}
+    The registry is the single source of truth. There is no in-memory cache —
+    every call consults the registry so that external actors (CLI stop-all,
+    another process) are always reflected immediately.
+    """
 
     async def get_or_start(
         self,
@@ -166,59 +167,76 @@ class ServerManager:
         workspace: str | None = None,
         user_id: str | None = None,
     ) -> _ManagedServer:
-        """Return the running server for key, starting one if needed."""
-        if key not in self._servers:
-            from .registry import delete as registry_delete
-            from .registry import is_alive
-            from .registry import read as registry_read
+        """Return a client for the running server, starting one if needed."""
+        from .client import OpenCodeClient
+        from .registry import delete as registry_delete
+        from .registry import is_alive
+        from .registry import read as registry_read
 
-            existing = registry_read(key)
-            if existing is not None:
-                if is_alive(existing.pid):
-                    from .client import OpenCodeClient
-
-                    client = OpenCodeClient(
-                        base_url=f"http://127.0.0.1:{existing.port}",
-                        password=existing.password,
-                    )
-                    self._servers[key] = _ManagedServer(
-                        key=key,
-                        process=None,
-                        client=client,
-                        server_dir=Path(existing.server_dir) if existing.server_dir else None,
-                    )
-                    return self._servers[key]
-                else:
-                    registry_delete(key)  # stale entry — fall through to _start()
-
-            self._servers[key] = await self._start(
+        entry = registry_read(key)
+        if entry is not None and is_alive(entry.pid):
+            return _ManagedServer(
                 key=key,
-                project_dir=project_dir,
-                server_dir=server_dir,
-                materials=materials,
-                config=config,
-                env=env,
-                workspace=workspace,
-                user_id=user_id,
+                process=None,
+                client=OpenCodeClient(
+                    base_url=f"http://127.0.0.1:{entry.port}",
+                    password=entry.password,
+                ),
+                server_dir=Path(entry.server_dir) if entry.server_dir else None,
             )
-        return self._servers[key]
+
+        # Not running — clean up stale registry entry and start fresh.
+        if entry is not None:
+            registry_delete(key)
+
+        return await self._start(
+            key=key,
+            project_dir=project_dir,
+            server_dir=server_dir,
+            materials=materials,
+            config=config,
+            env=env,
+            workspace=workspace,
+            user_id=user_id,
+        )
 
     async def stop(self, key: str) -> None:
-        """Terminate the server for the given key. No-op if not running."""
+        """Kill the server for key and remove its registry entry. No-op if not running."""
         from .registry import delete as registry_delete
+        from .registry import is_alive
+        from .registry import read as registry_read
 
-        server = self._servers.pop(key, None)
-        if server is not None:
-            if server.process is not None:
-                # Owned — we started it, we kill it and clean the registry
-                await _terminate_process(server.process)
-                registry_delete(key)
-            # else: attached to external process — detach only, leave process and registry intact
+        entry = registry_read(key)
+        if entry is None:
+            return
+
+        registry_delete(key)
+
+        if is_alive(entry.pid):
+            import os
+            import signal
+
+            try:
+                os.kill(entry.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                return
+            # Wait for the process to exit (up to 5s, then SIGKILL).
+            deadline = asyncio.get_event_loop().time() + 5.0
+            while asyncio.get_event_loop().time() < deadline:
+                if not is_alive(entry.pid):
+                    return
+                await asyncio.sleep(0.1)
+            try:
+                os.kill(entry.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
 
     async def stop_all(self) -> None:
-        """Terminate all managed server processes."""
-        for key in list(self._servers):
-            await self.stop(key)
+        """Kill all servers tracked in the registry."""
+        from .registry import list_all
+
+        for entry in list_all():
+            await self.stop(entry.key)
 
     async def _start(
         self,
