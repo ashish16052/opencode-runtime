@@ -23,6 +23,11 @@ async def harness(tmp_path):
     await h.stop()
 
 
+def _client(h: OpenCodeHarness):
+    """Return the client from the first (default) server."""
+    return list(h._server_manager._servers.values())[0].client
+
+
 class TestSessionFactory:
     async def test_session_returns_opencodesession(self, harness):
         session = await harness.session(workspace="acme", user_id="u_1")
@@ -34,9 +39,9 @@ class TestSessionFactory:
         session = await harness.session(session_id="chat_456")
         assert session.session_id == "chat_456"
 
-    async def test_session_raw_client_is_harness_client(self, harness):
+    async def test_session_raw_client_is_server_client(self, harness):
         session = await harness.session()
-        assert session.raw_client is harness._client
+        assert session.raw_client is _client(harness)
 
     async def test_session_oc_session_id_starts_none(self, harness):
         session = await harness.session()
@@ -49,21 +54,23 @@ class TestSessionFactory:
 
 class TestOpenCodeSession:
     async def test_create_returns_id(self, harness):
-        result = await harness._client.post("/session", {})
+        result = await _client(harness).post("/session", {})
         assert "id" in result
         assert len(result["id"]) > 0
 
     async def test_create_with_title(self, harness):
-        result = await harness._client.post("/session", {"title": "my session"})
+        result = await _client(harness).post("/session", {"title": "my session"})
         assert "id" in result
 
     async def test_get_by_id(self, harness):
-        created = await harness._client.post("/session", {})
-        fetched = await harness._client.get(f"/session/{created['id']}")
+        client = _client(harness)
+        created = await client.post("/session", {})
+        fetched = await client.get(f"/session/{created['id']}")
         assert fetched["id"] == created["id"]
 
     async def test_list_includes_created(self, harness):
-        await harness._client.post("/session", {})
-        sessions = await harness._client.get("/session")
+        client = _client(harness)
+        await client.post("/session", {})
+        sessions = await client.get("/session")
         assert isinstance(sessions, list)
         assert len(sessions) >= 1

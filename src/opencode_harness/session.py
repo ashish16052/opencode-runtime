@@ -1,26 +1,23 @@
 from __future__ import annotations
 
+import asyncio
 import typing as t
-
-if t.TYPE_CHECKING:
-    from .harness import OpenCodeHarness
 
 from .event import OpenCodeEvent
 from .response import OpenCodeResponse
 
+if t.TYPE_CHECKING:
+    from .client import OpenCodeClient
+
 
 class OpenCodeSession:
-    """A lightweight conversation wrapper backed by an ``OpenCodeHarness``.
+    """A conversation session with an OpenCode server.
 
-    Sessions delegate all runtime concerns (server, client, config) back to
-    the harness. The session itself only owns conversation-level state:
-    workspace, user_id, session_id, and per-session config/env overrides.
-
-    Obtain via ``OpenCodeHarness.session()`` or the convenience helpers
-    ``OpenCodeHarness.ask()`` / ``OpenCodeHarness.stream()``.
+    Sessions are self-contained — they hold their own client, config, and
+    conversation state. Obtain via ``OpenCodeHarness.session()``.
 
     Args:
-        harness:     The harness that owns the server and client.
+        client:      The HTTP client for the server backing this session.
         workspace:   Logical tenant/workspace name, e.g. ``"acme"``.
         user_id:     Application user id, e.g. ``"u_123"``.
         session_id:  External correlation id stored in metadata. OpenCode
@@ -32,14 +29,14 @@ class OpenCodeSession:
     def __init__(
         self,
         *,
-        harness: OpenCodeHarness,
+        client: OpenCodeClient,
         workspace: str | None,
         user_id: str | None,
         session_id: str | None,
         config: dict[str, t.Any],
         env: dict[str, str],
     ) -> None:
-        self._harness = harness
+        self._client = client
         self.workspace = workspace
         self.user_id = user_id
         self.session_id = session_id
@@ -49,9 +46,9 @@ class OpenCodeSession:
         self._oc_session_id: str | None = None  # set after POST /session
 
     @property
-    def raw_client(self):
-        """The HTTP client owned by the harness. None until server is started."""
-        return self._harness._client
+    def raw_client(self) -> OpenCodeClient:
+        """The HTTP client for the server backing this session."""
+        return self._client
 
     # ------------------------------------------------------------------
     # Public interface
@@ -99,30 +96,16 @@ class OpenCodeSession:
             tools:   Per-tool enable/disable map, e.g. ``{"bash": False}``.
             system:  Additional system prompt text.
         """
-        from .exceptions import OpenCodeServerError
-
-        client = self.raw_client
-        if client is None:
-            raise OpenCodeServerError(
-                "No opencode server running. "
-                "Use 'async with OpenCodeHarness(...) as h' to start one."
-            )
-
         # Create an OpenCode session server-side if we don't have one yet
         if self._oc_session_id is None:
-            result = await client.post("/session", {})
+            result = await self._client.post("/session", {})
             self._oc_session_id = result["id"]
 
-        # Narrowed local — type checker sees str, not str | None
         oc_session_id = self._oc_session_id
         assert oc_session_id is not None
 
-        # Subscribe to SSE stream first, then fire the message.
-        # This avoids a race where events arrive before we start listening.
-        import asyncio
-
         send_task = asyncio.create_task(
-            client.send(
+            self._client.send(
                 oc_session_id,
                 message,
                 model=model,
@@ -133,10 +116,9 @@ class OpenCodeSession:
         )
 
         try:
-            async for event in client.events(oc_session_id):
+            async for event in self._client.events(oc_session_id):
                 yield event
         finally:
-            # Ensure send task is awaited even if caller breaks early
             if not send_task.done():
                 send_task.cancel()
                 try:
@@ -146,8 +128,8 @@ class OpenCodeSession:
 
     async def abort(self) -> None:
         """Abort a running session."""
-        if self.raw_client is not None and self._oc_session_id is not None:
-            await self.raw_client.post(f"/session/{self._oc_session_id}/abort", {})
+        if self._oc_session_id is not None:
+            await self._client.post(f"/session/{self._oc_session_id}/abort", {})
 
     async def close(self) -> None:
         """Release conversation-level resources."""

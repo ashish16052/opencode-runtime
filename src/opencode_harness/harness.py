@@ -1,35 +1,37 @@
 from __future__ import annotations
 
-import asyncio
-import os
-import secrets
-import shutil
 import typing as t
 from pathlib import Path
 
-from .server import _find_free_port, _prepare_dir, _terminate_process, _wait_healthy
+from .server import ServerManager, _compute_runtime_key
 
 if t.TYPE_CHECKING:
-    from .client import OpenCodeClient
     from .session import OpenCodeSession
 
 
 class OpenCodeHarness:
     """Lifecycle manager and session factory for opencode-harness.
 
-    ``OpenCodeHarness`` is the single owner of runtime state: the server
-    process, the HTTP client, runtime directory layout, config, and materials.
-    Sessions are lightweight wrappers that delegate back to the harness.
+    ``OpenCodeHarness`` owns the public API: it accepts configuration,
+    manages the server lifecycle via ``ServerManager``, and produces
+    ``OpenCodeSession`` objects. All process and runtime concerns are
+    delegated to ``ServerManager``.
 
     Args:
         project_dir:  The project directory OpenCode should run against.
         runtime_dir:  Where opencode-harness stores managed runtime state.
+                      When set, each session gets an isolated server with
+                      its own HOME, config, and materials under
+                      ``runtime_dir/servers/<key>/``.
+                      When not set, OpenCode runs with the user's real
+                      environment and discovers config normally.
         materials:    OpenCode-native files to overlay into the runtime
-                      workspace. Applied to every session unless overridden.
-        config:       Raw OpenCode config dict. Merged with per-session config
-                      (session config takes precedence).
-        env:          Extra environment variables passed to the opencode server
-                      process. Merged with per-session env overrides.
+                      workspace. Applied to every session unless overridden
+                      per-session.
+        config:       Raw OpenCode config dict. Merged with per-session
+                      config (session config takes precedence).
+        env:          Extra environment variables passed to the opencode
+                      server process.
     """
 
     def __init__(
@@ -46,9 +48,7 @@ class OpenCodeHarness:
         self.materials = materials
         self.config = config or {}
         self.env = env or {}
-
-        self._client: OpenCodeClient | None = None  # set in _start_server
-        self._process = None  # asyncio.subprocess.Process, set in _start_server
+        self._server_manager = ServerManager()
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -62,15 +62,12 @@ class OpenCodeHarness:
         await self.stop()
 
     async def start(self) -> None:
-        """Prepare the runtime directory and start the opencode server."""
-        if self.runtime_dir is not None:
-            self.runtime_dir.mkdir(parents=True, exist_ok=True)
-        await self._prepare_runtime()
-        await self._start_server()
+        """Start the default server eagerly so the harness is ready to use."""
+        await self.session()
 
     async def stop(self) -> None:
-        """Shut down the managed opencode server."""
-        await self._stop_server()
+        """Shut down all managed opencode server processes."""
+        await self._server_manager.stop_all()
 
     # ------------------------------------------------------------------
     # Session factory
@@ -87,6 +84,10 @@ class OpenCodeHarness:
     ) -> OpenCodeSession:
         """Create a session backed by this harness.
 
+        Each unique combination of workspace, user_id, materials, and config
+        maps to a dedicated opencode server process. The server is started on
+        first use and reused for subsequent sessions with the same key.
+
         Args:
             workspace:   Logical tenant/workspace name, e.g. ``"acme"``.
             user_id:     Application user id, e.g. ``"u_123"``.
@@ -97,89 +98,33 @@ class OpenCodeHarness:
         """
         from .session import OpenCodeSession
 
+        effective_config = {**self.config, **(config or {})}
+        effective_env = {**self.env, **(env or {})}
+
+        key = _compute_runtime_key(
+            workspace,
+            user_id,
+            self.project_dir,
+            self.materials,
+            effective_config,
+        )
+
+        server_dir = self.runtime_dir / "servers" / key if self.runtime_dir is not None else None
+
+        server = await self._server_manager.get_or_start(
+            key=key,
+            project_dir=self.project_dir,
+            server_dir=server_dir,
+            materials=self.materials,
+            config=effective_config,
+            env=effective_env,
+        )
+
         return OpenCodeSession(
-            harness=self,
+            client=server.client,
             workspace=workspace,
             user_id=user_id,
             session_id=session_id,
-            config={**self.config, **(config or {})},
-            env={**self.env, **(env or {})},
+            config=effective_config,
+            env=effective_env,
         )
-
-    # ------------------------------------------------------------------
-    # Internal — runtime preparation (extracted later when complex)
-    # ------------------------------------------------------------------
-
-    async def _prepare_runtime(self) -> None:
-        """Write config overlay and copy materials into runtime_dir.
-
-        Only runs when runtime_dir is set — without it OpenCode discovers
-        config from its native XDG paths.
-        """
-        if self.runtime_dir is None:
-            return
-        _prepare_dir(self.runtime_dir, self.config, self.materials)
-
-    async def _start_server(self) -> None:
-        """Start the opencode server process and initialise the client."""
-        from .client import OpenCodeClient
-        from .exceptions import OpenCodeNotFoundError
-
-        if shutil.which("opencode") is None:
-            raise OpenCodeNotFoundError(
-                "opencode binary not found on PATH. Install it with: npm install -g opencode-ai"
-            )
-
-        port = _find_free_port()
-        host = "127.0.0.1"
-        password = secrets.token_urlsafe(32)
-
-        env = {**os.environ, **self.env}
-        env["OPENCODE_SERVER_PASSWORD"] = password
-
-        if self.runtime_dir is not None:
-            env["HOME"] = str(self.runtime_dir)
-            env["TMPDIR"] = str(self.runtime_dir / "tmp")
-            env["OPENCODE_CONFIG_HOME"] = str(self.runtime_dir)
-            (self.runtime_dir / "tmp").mkdir(parents=True, exist_ok=True)
-
-        if self.runtime_dir is not None:
-            log_file = open(self.runtime_dir / "opencode.log", "ab")
-            stdout = log_file
-            stderr = log_file
-        else:
-            stdout = asyncio.subprocess.DEVNULL
-            stderr = asyncio.subprocess.DEVNULL
-
-        self._process = await asyncio.create_subprocess_exec(
-            "opencode",
-            "serve",
-            "--hostname",
-            host,
-            "--port",
-            str(port),
-            cwd=str(self.project_dir),
-            env=env,
-            stdout=stdout,
-            stderr=stderr,
-        )
-
-        self._client = OpenCodeClient(
-            base_url=f"http://{host}:{port}",
-            password=password,
-        )
-
-        try:
-            await _wait_healthy(self._client)
-        except Exception:
-            self._process.kill()
-            self._process = None
-            self._client = None
-            raise
-
-    async def _stop_server(self) -> None:
-        """Terminate the opencode server process."""
-        if self._process is not None:
-            await _terminate_process(self._process)
-            self._process = None
-        self._client = None
