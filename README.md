@@ -145,7 +145,7 @@ async with OpenCodeHarness() as h:
 
 ## CLI
 
-`opencode-harness` ships with a CLI for managing server processes directly from the terminal.
+`opencode-harness` ships with a CLI for managing opencode servers from the terminal. Useful for inspecting what your application is running, debugging sessions, or managing servers independently.
 
 ### Start a server
 
@@ -193,6 +193,25 @@ opencode-harness stop 39dce5beb4debfaa
 
 ```sh
 opencode-harness stop-all
+```
+
+### Library + CLI
+
+Start a server from Python, then inspect and manage it from the terminal:
+
+```python
+# app.py
+async with OpenCodeHarness() as h:
+    session = await h.session()
+    response = await session.ask("Review this PR")
+    print(response.text)
+```
+
+```sh
+# while app.py is running
+opencode-harness ps
+opencode-harness health 39dce5beb4debfaa
+opencode-harness stop   39dce5beb4debfaa
 ```
 
 ## Requirements
