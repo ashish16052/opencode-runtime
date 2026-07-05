@@ -141,8 +141,25 @@ class OpenCodeClient:
     async def events(self, session_id: str) -> t.AsyncIterator[OpenCodeEvent]:
         """GET /global/event — SSE bus filtered to ``session_id``.
 
-        Yields :class:`~opencode_harness.event.OpenCodeEvent` and terminates
-        on ``session.idle`` or an error event for this session.
+        Yields every :class:`~opencode_harness.event.OpenCodeEvent` that
+        OpenCode emits for this session and terminates on a terminal event.
+
+        The harness does **no interpretation** — all events are forwarded as-is
+        so callers can handle whatever OpenCode emits (text deltas, tool calls,
+        thinking, permission requests, status updates, etc.).
+
+        Common event types emitted by OpenCode:
+
+        * ``message.part.delta`` — incremental token; ``event.text`` is the
+          delta string when ``properties.field == "text"``.
+        * ``message.part.updated`` — full part snapshot (text, tool, thinking,
+          …); ``event.text`` is the text content when ``part.type == "text"``.
+        * ``session.status`` — status change (e.g. ``{type: "running"}``).
+        * ``session.idle`` — terminal; model finished.
+        * ``session.error`` — terminal; something went wrong.
+        * ``permission.asked`` — tool permission request; caller must handle.
+
+        Only ``sync`` bus-noise events are suppressed.
         """
         async with self._http() as http:
             async with http.stream("GET", "/global/event") as r:
@@ -174,6 +191,11 @@ class OpenCodeClient:
                         continue
 
                     event_type = payload.get("type", "")
+
+                    # Suppress internal bus noise — never useful to callers.
+                    if event_type == "sync":
+                        continue
+
                     props = payload.get("properties", {})
                     if not isinstance(props, dict):
                         props = {}
@@ -183,31 +205,24 @@ class OpenCodeClient:
                     if sid is not None and sid != session_id:
                         continue
 
-                    if event_type == "message.part.updated":
-                        part = props.get("part", {})
-                        # Only yield text from assistant response parts.
-                        # User message echoes have type="text" but no "time" field.
-                        if part.get("type") == "text" and "time" in part:
-                            text = part.get("text")
-                            if text:
-                                yield OpenCodeEvent(type="message.delta", text=text, raw=payload)
+                    # Derive a convenience text field where it naturally exists,
+                    # so callers don't have to dig into raw for the common case.
+                    text: str | None = None
+                    if event_type == "message.part.delta" and props.get("field") == "text":
+                        text = props.get("delta") or None
+                    elif event_type == "message.part.updated":
+                        part = props.get("part") or {}
+                        if isinstance(part, dict) and part.get("type") == "text":
+                            text = part.get("text") or None
 
-                    elif event_type == "session.idle":
-                        yield OpenCodeEvent(type="message.completed", raw=payload)
+                    yield OpenCodeEvent(type=event_type, text=text, raw=payload)
+
+                    # Terminal events — stop iterating after yielding.
+                    if event_type == "session.idle":
                         return
-
-                    elif event_type == "session.status":
+                    if event_type == "session.error":
+                        return
+                    if event_type == "session.status":
                         status = props.get("status", {})
                         if isinstance(status, dict) and status.get("type") == "idle":
-                            yield OpenCodeEvent(type="message.completed", raw=payload)
                             return
-
-                    elif event_type == "session.error":
-                        error = props.get("error", {})
-                        msg = (
-                            error.get("data", {}).get("message", "")
-                            if isinstance(error, dict)
-                            else str(error)
-                        )
-                        yield OpenCodeEvent(type="error", text=msg, raw=payload)
-                        return

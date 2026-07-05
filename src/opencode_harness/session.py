@@ -56,8 +56,10 @@ class OpenCodeSession:
     async def ask(self, message: str, **kwargs: t.Any) -> OpenCodeResponse:
         """Send a message and collect the full response.
 
-        Accumulates all ``message.delta`` text from the stream and returns a
-        single :class:`OpenCodeResponse`.
+        Accumulates incremental text from ``message.part.delta`` events and
+        returns a single :class:`OpenCodeResponse` when the session goes idle.
+        All events (tool calls, thinking, status updates, etc.) are preserved
+        in ``OpenCodeResponse.raw`` for inspection.
         """
         from .exceptions import OpenCodeServerError
 
@@ -66,9 +68,9 @@ class OpenCodeSession:
 
         async for event in self.stream(message, **kwargs):
             raw_events.append(event.raw)
-            if event.type == "error":
+            if event.type == "session.error":
                 raise OpenCodeServerError(event.text or "unknown error from opencode server")
-            if event.type == "message.delta" and event.text:
+            if event.type == "message.part.delta" and event.text:
                 text += event.text
 
         return OpenCodeResponse(text=text, raw=raw_events)
@@ -83,10 +85,15 @@ class OpenCodeSession:
         system: str | None = None,
         **kwargs: t.Any,
     ) -> t.AsyncIterator[OpenCodeEvent]:
-        """Send a message and stream events as they arrive.
+        """Send a message and stream all events as they arrive.
 
-        Yields :class:`OpenCodeEvent` objects. Use ``event.text`` for delta
-        text and ``event.raw`` for the full server payload.
+        Yields every :class:`OpenCodeEvent` emitted by OpenCode for this
+        session — text deltas, tool calls, thinking, status updates,
+        permission requests, and terminal events. No filtering or
+        interpretation is applied; callers decide what to handle.
+
+        The stream terminates automatically on ``session.idle`` or
+        ``session.error``.
 
         Args:
             message: The user message to send.
