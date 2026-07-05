@@ -15,8 +15,8 @@ def isolated_registry(tmp_path, monkeypatch):
     monkeypatch.setattr(registry, "REGISTRY_DIR", tmp_path / "servers")
 
 
-def make_entry(**kwargs) -> RegistryEntry:
-    defaults = dict(
+def make_entry(**kwargs: object) -> RegistryEntry:
+    defaults: dict[str, object] = dict(
         key="abc123def456abcd",
         pid=99999,
         port=54321,
@@ -26,7 +26,7 @@ def make_entry(**kwargs) -> RegistryEntry:
         started_at="2026-07-05T00:00:00+00:00",
     )
     defaults.update(kwargs)
-    return RegistryEntry(**defaults)
+    return RegistryEntry(**defaults)  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------
@@ -49,7 +49,45 @@ def test_write_read_with_server_dir():
     entry = make_entry(server_dir="/tmp/runtime/servers/abc123")
     registry.write(entry)
     result = registry.read(entry.key)
+    assert result is not None
     assert result.server_dir == "/tmp/runtime/servers/abc123"
+
+
+# ---------------------------------------------------------------------------
+# workspace / user_id
+# ---------------------------------------------------------------------------
+
+
+def test_write_read_with_workspace_and_user_id():
+    entry = make_entry(workspace="org_a", user_id="u_1")
+    registry.write(entry)
+    result = registry.read(entry.key)
+    assert result is not None
+    assert result.workspace == "org_a"
+    assert result.user_id == "u_1"
+
+
+def test_read_old_entry_missing_workspace_defaults_to_none():
+    """Old JSON files without workspace/user_id fields should load with None defaults."""
+    import json
+
+    registry.REGISTRY_DIR.mkdir(parents=True, exist_ok=True)
+    old_data = dict(
+        key="abc123def456abcd",
+        pid=99999,
+        port=54321,
+        password="secret",
+        project_dir="/tmp/project",
+        server_dir=None,
+        started_at="2026-07-05T00:00:00+00:00",
+        # no workspace, no user_id
+    )
+    path = registry.REGISTRY_DIR / "abc123def456abcd.json"
+    path.write_text(json.dumps(old_data), encoding="utf-8")
+    result = registry.read("abc123def456abcd")
+    assert result is not None
+    assert result.workspace is None
+    assert result.user_id is None
 
 
 # ---------------------------------------------------------------------------
