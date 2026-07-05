@@ -39,7 +39,11 @@ def _find_free_port(host: str = "127.0.0.1") -> int:
         return s.getsockname()[1]
 
 
-async def _wait_healthy(client: OpenCodeClient, timeout: float = 20.0) -> None:
+async def _wait_healthy(
+    client: OpenCodeClient,
+    timeout: float = 60.0,
+    process: asyncio.subprocess.Process | None = None,
+) -> None:
     """Poll GET /global/health until the server responds or timeout expires."""
     from .exceptions import OpenCodeTimeoutError
 
@@ -47,12 +51,14 @@ async def _wait_healthy(client: OpenCodeClient, timeout: float = 20.0) -> None:
     last_exc: Exception | None = None
 
     while asyncio.get_event_loop().time() < deadline:
+        if process is not None and process.returncode is not None:
+            raise OpenCodeTimeoutError(f"opencode process exited with code {process.returncode}")
         try:
             await client.health()
             return
         except Exception as exc:
             last_exc = exc
-            await asyncio.sleep(0.25)
+            await asyncio.sleep(1.0)
 
     raise OpenCodeTimeoutError(
         f"opencode server did not become healthy within {timeout}s (last error: {last_exc})"
@@ -234,8 +240,16 @@ class ServerManager:
             password=password,
         )
 
+        # Use a short per-request timeout while polling — avoids a single
+        # hanging request consuming the entire startup budget.
+        poll_client = OpenCodeClient(
+            base_url=f"http://127.0.0.1:{port}",
+            password=password,
+            timeout=3.0,
+        )
+
         try:
-            await _wait_healthy(client)
+            await _wait_healthy(poll_client, process=process)
         except Exception:
             await _terminate_process(process)
             raise
