@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-07
+
+### Added
+- CLI ↔ library registry integration — servers started by `OpenCodeHarness` appear in `opencode-harness ps` and can be managed with `stop` and `health`
+- `OpenCodeHarness` and `opencode-harness serve` share the same registry — same key, same server, no duplicate spawning
+- Registry as single source of truth — `ServerManager` always consults the registry on every `session()` call; external changes (CLI `stop-all`, another process) are reflected immediately without restart
+- `stop()` and `stop-all` always terminate the server process regardless of which actor started it; registry entry is cleaned up atomically
+- `workspace` and `user_id` stored in registry entries for both library and CLI-started servers
+
 ## [0.2.0] - 2026-07-06
 
 ### Added
