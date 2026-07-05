@@ -51,6 +51,21 @@ class TestSessionFactory:
         session = await harness.session(config={"model": "test/model"})
         assert session.config["model"] == "test/model"
 
+    async def test_session_materials_override_gets_separate_server(self, tmp_path):
+        """Per-session materials → different runtime key → different server."""
+        mat_dir = tmp_path / "materials"
+        mat_dir.mkdir()
+        (mat_dir / "AGENTS.md").write_text("# agents")
+
+        async with OpenCodeHarness(
+            project_dir=tmp_path,
+            runtime_dir=tmp_path / "runtime",
+        ) as h:
+            s1 = await h.session()
+            s2 = await h.session(materials=str(mat_dir))
+            # Different materials → different key → different server/client
+            assert s1.raw_client is not s2.raw_client
+
 
 class TestOpenCodeSession:
     async def test_create_returns_id(self, harness):

@@ -79,6 +79,7 @@ class OpenCodeHarness:
         workspace: str | None = None,
         user_id: str | None = None,
         session_id: str | None = None,
+        materials: str | Path | list[str | Path] | None = None,
         config: dict[str, t.Any] | None = None,
         env: dict[str, str] | None = None,
     ) -> OpenCodeSession:
@@ -93,11 +94,14 @@ class OpenCodeHarness:
             user_id:     Application user id, e.g. ``"u_123"``.
             session_id:  External correlation id stored in metadata. OpenCode
                          generates its own internal session id server-side.
+            materials:   Per-session materials override. Falls back to
+                         harness-level materials when not set.
             config:      Merged on top of harness-level config.
             env:         Merged on top of harness-level env.
         """
         from .session import OpenCodeSession
 
+        effective_materials = materials if materials is not None else self.materials
         effective_config = {**self.config, **(config or {})}
         effective_env = {**self.env, **(env or {})}
 
@@ -105,7 +109,7 @@ class OpenCodeHarness:
             workspace,
             user_id,
             self.project_dir,
-            self.materials,
+            effective_materials,
             effective_config,
         )
 
@@ -115,7 +119,7 @@ class OpenCodeHarness:
             key=key,
             project_dir=self.project_dir,
             server_dir=server_dir,
-            materials=self.materials,
+            materials=effective_materials,
             config=effective_config,
             env=effective_env,
         )
