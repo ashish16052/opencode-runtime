@@ -5,6 +5,7 @@ Tests for ServerManager — require the real opencode binary.
 
 from pathlib import Path
 
+import opencode_harness.registry as registry
 from opencode_harness.server import (
     ServerManager,
     _ManagedServer,
@@ -213,3 +214,127 @@ class TestServerManager:
         """stop(key) on an unknown key does not raise."""
         manager = ServerManager()
         await manager.stop("nonexistent")  # should not raise
+
+
+class TestServerManagerRegistry:
+    async def test_start_writes_registry_entry(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(registry, "REGISTRY_DIR", tmp_path / "reg")
+        manager = ServerManager()
+        key = _compute_runtime_key(None, None, tmp_path, None, {})
+        server = await manager.get_or_start(
+            key=key,
+            project_dir=tmp_path,
+            server_dir=tmp_path / "srv",
+            materials=None,
+            config={},
+            env={},
+        )
+        entry = registry.read(key)
+        assert entry is not None
+        assert entry.pid == server.process.pid
+        assert entry.port == int(server.client.base_url.split(":")[-1])
+        await manager.stop_all()
+
+    async def test_stop_deletes_registry_entry(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(registry, "REGISTRY_DIR", tmp_path / "reg")
+        manager = ServerManager()
+        key = _compute_runtime_key(None, None, tmp_path, None, {})
+        await manager.get_or_start(
+            key=key,
+            project_dir=tmp_path,
+            server_dir=tmp_path / "srv",
+            materials=None,
+            config={},
+            env={},
+        )
+        await manager.stop(key)
+        assert registry.read(key) is None
+
+    async def test_attaches_to_alive_registry_entry(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(registry, "REGISTRY_DIR", tmp_path / "reg")
+        manager1 = ServerManager()
+        key = _compute_runtime_key(None, None, tmp_path, None, {})
+        s1 = await manager1.get_or_start(
+            key=key,
+            project_dir=tmp_path,
+            server_dir=tmp_path / "srv",
+            materials=None,
+            config={},
+            env={},
+        )
+
+        # Second manager sees the registry entry and attaches
+        manager2 = ServerManager()
+        s2 = await manager2.get_or_start(
+            key=key,
+            project_dir=tmp_path,
+            server_dir=tmp_path / "srv",
+            materials=None,
+            config={},
+            env={},
+        )
+        assert s2.process is None  # attached, not owned
+        assert s2.client.base_url == s1.client.base_url  # same server
+
+        # manager2 stop detaches only — registry and process intact
+        await manager2.stop(key)
+        assert registry.read(key) is not None
+        assert registry.is_alive(s1.process.pid)
+
+        await manager1.stop_all()
+
+    async def test_stale_registry_entry_cleaned_on_attach(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(registry, "REGISTRY_DIR", tmp_path / "reg")
+        # Write a stale entry with a dead PID
+        from opencode_harness.registry import RegistryEntry, now_iso
+
+        key = _compute_runtime_key(None, None, tmp_path, None, {})
+        registry.write(
+            RegistryEntry(
+                key=key,
+                pid=99999999,
+                port=54321,
+                password="stale",
+                project_dir=str(tmp_path),
+                server_dir=None,
+                started_at=now_iso(),
+            )
+        )
+
+        manager = ServerManager()
+        server = await manager.get_or_start(
+            key=key,
+            project_dir=tmp_path,
+            server_dir=tmp_path / "srv",
+            materials=None,
+            config={},
+            env={},
+        )
+        # Fresh server was spawned — process is real and alive
+        assert server.process is not None
+        assert server.process.returncode is None
+        # New registry entry has the correct PID
+        entry = registry.read(key)
+        assert entry is not None
+        assert entry.pid == server.process.pid
+        await manager.stop_all()
+
+    async def test_start_stores_workspace_and_user_id(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(registry, "REGISTRY_DIR", tmp_path / "reg")
+        manager = ServerManager()
+        key = _compute_runtime_key("org_a", "u_1", tmp_path, None, {})
+        await manager.get_or_start(
+            key=key,
+            project_dir=tmp_path,
+            server_dir=tmp_path / "srv",
+            materials=None,
+            config={},
+            env={},
+            workspace="org_a",
+            user_id="u_1",
+        )
+        entry = registry.read(key)
+        assert entry is not None
+        assert entry.workspace == "org_a"
+        assert entry.user_id == "u_1"
+        await manager.stop_all()
