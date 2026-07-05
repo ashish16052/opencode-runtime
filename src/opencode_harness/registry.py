@@ -1,10 +1,12 @@
 """
-Registry for tracking server processes started by the CLI.
+Registry for tracking opencode server processes.
 
 Each running server is represented by a JSON file at:
     ~/.opencode-harness/servers/<key>.json
 
-This module is used exclusively by the CLI — not by the library harness.
+Used by both the CLI (opencode-harness serve/ps/stop) and the library
+(OpenCodeHarness) — the registry is the shared source of truth for all
+running servers regardless of how they were started.
 """
 
 from __future__ import annotations
