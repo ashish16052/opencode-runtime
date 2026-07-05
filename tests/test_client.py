@@ -26,29 +26,29 @@ async def harness(tmp_path):
     await h.stop()
 
 
-def _client(h: OpenCodeHarness):
-    return list(h._server_manager._servers.values())[0].client
+@pytest.fixture
+async def client(harness):
+    session = await harness.session()
+    return session.raw_client
 
 
 class TestHealth:
-    async def test_health_returns_healthy(self, harness):
-        result = await _client(harness).health()
+    async def test_health_returns_healthy(self, client):
+        result = await client.health()
         assert result["healthy"] is True
 
-    async def test_health_returns_version(self, harness):
-        result = await _client(harness).health()
+    async def test_health_returns_version(self, client):
+        result = await client.health()
         assert "version" in result
         assert isinstance(result["version"], str)
         assert len(result["version"]) > 0
 
-    async def test_health_without_auth_returns_401(self, harness):
-        client = _client(harness)
+    async def test_health_without_auth_returns_401(self, client):
         async with httpx.AsyncClient(base_url=client.base_url) as http:
             response = await http.get("/global/health")
         assert response.status_code == 401
 
-    async def test_health_with_wrong_password_returns_401(self, harness):
-        client = _client(harness)
+    async def test_health_with_wrong_password_returns_401(self, client):
         wrong = base64.b64encode(b"opencode:wrongpassword").decode()
         async with httpx.AsyncClient(base_url=client.base_url) as http:
             response = await http.get(
@@ -59,11 +59,11 @@ class TestHealth:
 
 
 class TestRawClient:
-    async def test_get_session_list(self, harness):
-        sessions = await _client(harness).get("/session")
+    async def test_get_session_list(self, client):
+        sessions = await client.get("/session")
         assert isinstance(sessions, list)
 
-    async def test_post_creates_session(self, harness):
-        result = await _client(harness).post("/session", {})
+    async def test_post_creates_session(self, client):
+        result = await client.post("/session", {})
         assert "id" in result
         assert isinstance(result["id"], str)
