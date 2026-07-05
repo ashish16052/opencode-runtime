@@ -11,11 +11,22 @@ import asyncio
 import json
 import shutil
 import socket
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from .client import OpenCodeClient
+
+
+@dataclass
+class _ManagedServer:
+    """A running opencode server process tracked by the harness."""
+
+    key: str
+    process: asyncio.subprocess.Process
+    client: OpenCodeClient
+    server_dir: Path | None  # None when runtime_dir is not set (no isolation)
 
 
 def _find_free_port(host: str = "127.0.0.1") -> int:
