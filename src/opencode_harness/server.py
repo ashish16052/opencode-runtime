@@ -184,6 +184,8 @@ class ServerManager:
         Raises ``OpenCodeServerError`` if key is not in the registry or the
         server is unreachable.
         """
+        import httpx
+
         from .client import OpenCodeClient
         from .exceptions import OpenCodeServerError
         from .registry import read as registry_read
@@ -196,7 +198,10 @@ class ServerManager:
             base_url=f"http://127.0.0.1:{entry.port}",
             password=entry.password,
         )
-        return await client.health()
+        try:
+            return await client.health()
+        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+            raise OpenCodeServerError(f"server {key!r} unreachable: {exc}") from exc
 
     async def stop(self, key: str) -> bool:
         """Kill the server for key and remove its registry entry.
