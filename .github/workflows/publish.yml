@@ -1,0 +1,32 @@
+name: publish
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write  # required for trusted publishing
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: install build deps
+        run: pip install build twine
+
+      - name: build
+        run: python -m build
+
+      - name: check
+        run: twine check dist/*
+
+      - name: publish
+        uses: pypa/gh-action-pypi-publish@release/v1
