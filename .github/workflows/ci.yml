@@ -21,6 +21,9 @@ jobs:
       - name: ruff
         run: ruff check src/ tests/
 
+      - name: install opencode
+        run: npm install -g opencode-ai
+
       - name: pytest
         run: pytest --timeout=30 -q
 
