@@ -21,6 +21,8 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from .client import OpenCodeClient
 
+from .registry import RegistryEntry
+
 
 @dataclass
 class _ManagedServer:
@@ -155,6 +157,83 @@ class ServerManager:
     another process) are always reflected immediately.
     """
 
+    def find(self, key: str) -> RegistryEntry | None:
+        """Return the registry entry for key, or None if not found."""
+        from .registry import read as registry_read
+
+        return registry_read(key)
+
+    def list(self) -> list[tuple[RegistryEntry, bool]]:
+        """Return all registry entries with their liveness status."""
+        from .registry import is_alive
+        from .registry import list_all
+
+        return [(entry, is_alive(entry.pid)) for entry in list_all()]
+
+    async def health(self, key: str) -> dict[str, Any]:
+        """Return health info for the server at key.
+
+        Raises ``OpenCodeServerError`` if key is not in the registry or the
+        server is unreachable.
+        """
+        from .client import OpenCodeClient
+        from .exceptions import OpenCodeServerError
+        from .registry import read as registry_read
+
+        entry = registry_read(key)
+        if entry is None:
+            raise OpenCodeServerError(f"server {key!r} not found in registry")
+
+        client = OpenCodeClient(
+            base_url=f"http://127.0.0.1:{entry.port}",
+            password=entry.password,
+        )
+        return await client.health()
+
+    async def stop(self, key: str) -> bool:
+        """Kill the server for key and remove its registry entry.
+
+        Returns True if the process was alive and killed, False if it was
+        already dead or not found in the registry.
+        """
+        from .registry import delete as registry_delete
+        from .registry import is_alive
+        from .registry import read as registry_read
+
+        entry = registry_read(key)
+        if entry is None:
+            return False
+
+        registry_delete(key)
+
+        if not is_alive(entry.pid):
+            return False
+
+        import signal
+
+        try:
+            os.kill(entry.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            return False
+        # Wait for the process to exit (up to 5s, then SIGKILL).
+        deadline = asyncio.get_event_loop().time() + 5.0
+        while asyncio.get_event_loop().time() < deadline:
+            if not is_alive(entry.pid):
+                return True
+            await asyncio.sleep(0.1)
+        try:
+            os.kill(entry.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        return True
+
+    async def stop_all(self) -> None:
+        """Kill all servers tracked in the registry."""
+        from .registry import list_all
+
+        for entry in list_all():
+            await self.stop(entry.key)
+
     async def get_or_start(
         self,
         *,
@@ -199,44 +278,6 @@ class ServerManager:
             workspace=workspace,
             user_id=user_id,
         )
-
-    async def stop(self, key: str) -> None:
-        """Kill the server for key and remove its registry entry. No-op if not running."""
-        from .registry import delete as registry_delete
-        from .registry import is_alive
-        from .registry import read as registry_read
-
-        entry = registry_read(key)
-        if entry is None:
-            return
-
-        registry_delete(key)
-
-        if is_alive(entry.pid):
-            import os
-            import signal
-
-            try:
-                os.kill(entry.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                return
-            # Wait for the process to exit (up to 5s, then SIGKILL).
-            deadline = asyncio.get_event_loop().time() + 5.0
-            while asyncio.get_event_loop().time() < deadline:
-                if not is_alive(entry.pid):
-                    return
-                await asyncio.sleep(0.1)
-            try:
-                os.kill(entry.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-
-    async def stop_all(self) -> None:
-        """Kill all servers tracked in the registry."""
-        from .registry import list_all
-
-        for entry in list_all():
-            await self.stop(entry.key)
 
     async def _start(
         self,
