@@ -131,10 +131,6 @@ def test_stop_live_server(tmp_path):
 
     cmd_stop(ns(key=entry.key))
 
-    # SIGTERM is async — give process a moment to exit
-    import time
-
-    time.sleep(0.5)
     assert not registry.is_alive(entry.pid)
     assert registry.read(entry.key) is None
 
@@ -170,9 +166,6 @@ def test_stop_all_kills_all(tmp_path):
 
     cmd_stop_all(ns())
 
-    import time
-
-    time.sleep(0.5)
     for pid in pids:
         assert not registry.is_alive(pid)
     assert registry.list_all() == []
