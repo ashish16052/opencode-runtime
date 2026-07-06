@@ -55,6 +55,7 @@ opencode-harness = "opencode_harness.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/opencode_harness"]
+artifacts = ["src/opencode_harness/py.typed"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
