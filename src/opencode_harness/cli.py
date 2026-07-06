@@ -13,15 +13,11 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import os
-import secrets
-import shutil
-import signal
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .registry import RegistryEntry, delete, is_alive, list_all, now_iso, read, write
+from .server import ServerManager, _compute_runtime_key
 
 # ---------------------------------------------------------------------------
 # ANSI
@@ -86,14 +82,6 @@ def _row(label: str, value: str) -> None:
 
 
 async def _serve(args: argparse.Namespace) -> None:
-    from .client import OpenCodeClient
-    from .server import _compute_runtime_key, _find_free_port, _prepare_dir, _terminate_process
-
-    if shutil.which("opencode") is None:
-        sys.exit(
-            _red("✗ opencode binary not found on PATH\n  Install with: npm install -g opencode-ai")
-        )
-
     project_dir = Path(args.project_dir).resolve()
     runtime_dir = Path(args.runtime_dir).resolve() if args.runtime_dir else None
     materials = args.materials or None
@@ -106,76 +94,35 @@ async def _serve(args: argparse.Namespace) -> None:
         config={},
     )
 
-    existing = read(key)
+    manager = ServerManager()
+
+    existing = manager.find(key)
     if existing is not None:
-        if is_alive(existing.pid):
+        if manager.is_alive(key):
             sys.exit(
                 _yellow(f"● Server already running  id={existing.key}  pid={existing.pid}\n")
                 + _dim(f"  use: opencode-harness stop {existing.key}")
             )
-        delete(key)
 
     server_dir: Path | None = None
     if runtime_dir is not None:
         server_dir = runtime_dir / "servers" / key
-        server_dir.mkdir(parents=True, exist_ok=True)
-        (server_dir / "tmp").mkdir(exist_ok=True)
-        _prepare_dir(server_dir, {}, materials)
-
-    port = _find_free_port()
-    password = secrets.token_urlsafe(32)
-
-    env = {**os.environ, "OPENCODE_SERVER_PASSWORD": password}
-    if server_dir is not None:
-        env.update(
-            HOME=str(server_dir),
-            TMPDIR=str(server_dir / "tmp"),
-            OPENCODE_CONFIG_HOME=str(server_dir),
-        )
-
-    log = open(server_dir / "opencode.log", "ab") if server_dir else asyncio.subprocess.DEVNULL
-    process = await asyncio.create_subprocess_exec(
-        "opencode",
-        "serve",
-        "--hostname",
-        "127.0.0.1",
-        "--port",
-        str(port),
-        cwd=str(project_dir),
-        env=env,
-        stdout=log,
-        stderr=log,
-    )
-
-    client = OpenCodeClient(base_url=f"http://127.0.0.1:{port}", password=password)
 
     print(_yellow("● Starting opencode server..."), flush=True)
-    for elapsed in range(60):
-        if process.returncode is not None:
-            sys.exit(_red(f"✗ opencode process exited with code {process.returncode}"))
-        try:
-            await client.health()
-            break
-        except Exception:
-            await asyncio.sleep(1.0)
-            print(f"\r  {_dim(f'waiting... {elapsed + 1}s')}", end="", flush=True)
-    else:
-        await _terminate_process(process)
-        sys.exit(_red("✗ Server did not become healthy within 60s"))
 
-    write(
-        RegistryEntry(
-            key=key,
-            pid=process.pid,
-            port=port,
-            password=password,
-            project_dir=str(project_dir),
-            server_dir=str(server_dir) if server_dir else None,
-            started_at=now_iso(),
-            workspace=args.workspace,
-            user_id=args.user_id,
-        )
+    server = await manager.get_or_start(
+        key=key,
+        project_dir=project_dir,
+        server_dir=server_dir,
+        materials=materials,
+        config={},
+        env={},
+        workspace=args.workspace,
+        user_id=args.user_id,
     )
+
+    entry = manager.find(key)
+    assert entry is not None
 
     print(f"\r{_green('✓ Server started')}\n")
     _row("ID", key)
@@ -184,8 +131,8 @@ async def _serve(args: argparse.Namespace) -> None:
     if args.user_id:
         _row("User", args.user_id)
     _row("Status", _green("● alive"))
-    _row("URL", f"http://127.0.0.1:{port}")
-    _row("PID", _dim(str(process.pid)))
+    _row("URL", server.client.base_url)
+    _row("PID", _dim(str(entry.pid)))
     _row("Project", _dim(_home(str(project_dir))))
     print()
     print(_dim(f"  opencode-harness health {key}"))
@@ -205,11 +152,10 @@ def cmd_serve(args: argparse.Namespace) -> None:
 
 
 def cmd_ps(_args: argparse.Namespace) -> None:
-    entries = list_all()
-    show_workspace = any(e.workspace for e in entries)
-    show_user = any(e.user_id for e in entries)
+    entries = ServerManager().list()
+    show_workspace = any(e.workspace for e, _ in entries)
+    show_user = any(e.user_id for e, _ in entries)
 
-    # Build format string dynamically
     cols = ["  {:<18}", "{:>6}", "{:>6}", "{:<7}", "{:>8}"]
     headers = ["ID", "PID", "PORT", "STATUS", "UPTIME"]
     if show_workspace:
@@ -225,8 +171,7 @@ def cmd_ps(_args: argparse.Namespace) -> None:
     print(_cyan(fmt.format(*headers)))
     print(_dim("  " + "─" * (70 + 14 * show_workspace + 14 * show_user)))
 
-    for e in entries:
-        alive = is_alive(e.pid)
+    for e, alive in entries:
         status_plain = "● alive" if alive else "● dead"
         status_coloured = _green(status_plain) if alive else _red(status_plain)
         vals = [e.key, str(e.pid), str(e.port), status_plain, _uptime(e.started_at, alive)]
@@ -246,15 +191,14 @@ def cmd_ps(_args: argparse.Namespace) -> None:
 
 
 def cmd_stop(args: argparse.Namespace) -> None:
-    entry = read(args.key)
+    manager = ServerManager()
+    entry = manager.find(args.key)
     if entry is None:
         sys.exit(_red(f"✗ ID {args.key!r} not found in registry"))
 
-    if is_alive(entry.pid):
-        os.kill(entry.pid, signal.SIGTERM)
-    else:
+    was_alive = asyncio.run(manager.stop(args.key))
+    if not was_alive:
         print(_yellow(f"  ● process {entry.pid} was already dead"))
-    delete(entry.key)
 
     print(f"{_green('✓ Server stopped')}\n")
     _row("ID", entry.key)
@@ -267,18 +211,16 @@ def cmd_stop(args: argparse.Namespace) -> None:
 
 
 def cmd_stop_all(_args: argparse.Namespace) -> None:
-    entries = list_all()
+    manager = ServerManager()
+    entries = manager.list()
     if not entries:
         print(_dim("  no servers running"))
         return
 
-    for entry in entries:
-        if is_alive(entry.pid):
-            os.kill(entry.pid, signal.SIGTERM)
-        delete(entry.key)
+    asyncio.run(manager.stop_all())
 
     print(f"{_green(f'✓ Stopped {len(entries)} server(s)')}\n")
-    for e in entries:
+    for e, _ in entries:
         print(f"  {_dim(e.key)}   {_dim(f'pid {e.pid}')}")
 
 
@@ -288,21 +230,19 @@ def cmd_stop_all(_args: argparse.Namespace) -> None:
 
 
 def cmd_health(args: argparse.Namespace) -> None:
-    import httpx
+    from .exceptions import OpenCodeServerError
 
-    from .client import OpenCodeClient
-
-    entry = read(args.key)
+    manager = ServerManager()
+    entry = manager.find(args.key)
     if entry is None:
         sys.exit(_red(f"✗ ID {args.key!r} not found in registry"))
 
     url = f"http://127.0.0.1:{entry.port}"
-    client = OpenCodeClient(base_url=url, password=entry.password)
     try:
-        result = asyncio.run(client.health())
+        result = asyncio.run(manager.health(args.key))
         version = result.get("version")
         print(_green("✓ healthy") + f"   {_dim(f'version {version}')}" + f"   {_dim(url)}")
-    except httpx.HTTPError as exc:
+    except OpenCodeServerError as exc:
         sys.exit(_red(f"✗ unreachable   {url}\n  {exc}"))
 
 
