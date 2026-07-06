@@ -15,12 +15,22 @@ class OpenCodeSession:
     Sessions are self-contained — they hold their own client, config, and
     conversation state. Obtain via ``OpenCodeHarness.session()``.
 
+    Each session maps to a single OpenCode server-side session. Calling
+    ``ask()`` or ``stream()`` multiple times on the same
+    ``OpenCodeSession`` instance sends follow-up messages within the same
+    conversation thread — OpenCode maintains the full history and context
+    between turns.
+
+    To start a new independent conversation, obtain a new session via
+    ``OpenCodeHarness.session()``.
+
     Args:
         client:      The HTTP client for the server backing this session.
         workspace:   Logical tenant/workspace name, e.g. ``"acme"``.
         user_id:     Application user id, e.g. ``"u_123"``.
-        session_id:  External correlation id stored in metadata. OpenCode
-                     generates its own internal session id server-side.
+        session_id:  OpenCode server-side session ID. Pass an existing ID to
+                     resume a previous conversation; omit to start a new one.
+                     Readable after the first ``ask()`` / ``stream()`` call.
         config:      Merged OpenCode config dict for this session.
         env:         Environment variable overrides for this session.
     """
@@ -38,11 +48,9 @@ class OpenCodeSession:
         self._client = client
         self.workspace = workspace
         self.user_id = user_id
-        self.session_id = session_id
+        self.session_id = session_id  # None until first stream(); set to resume
         self.config = config
         self.env = env
-
-        self._oc_session_id: str | None = None  # set after POST /session
 
     @property
     def raw_client(self) -> OpenCodeClient:
@@ -92,6 +100,10 @@ class OpenCodeSession:
         permission requests, and terminal events. No filtering or
         interpretation is applied; callers decide what to handle.
 
+        Calling ``stream()`` again on the same session after the first
+        stream completes sends a follow-up message in the same conversation
+        thread — full history is preserved server-side.
+
         The stream terminates automatically on ``session.idle`` or
         ``session.error``.
 
@@ -102,19 +114,21 @@ class OpenCodeSession:
             tools:   Per-tool enable/disable map, e.g. ``{"bash": False}``.
             system:  Additional system prompt text.
         """
-        # Create an OpenCode session server-side if we don't have one yet
-        if self._oc_session_id is None:
+        # Create an OpenCode session server-side if we don't have one yet.
+        # If session_id was provided at construction, skip creation — resume
+        # the existing conversation.
+        if self.session_id is None:
             result = await self._client.post("/session", {})
-            self._oc_session_id = result["id"]
+            self.session_id = result["id"]
 
-        oc_session_id = self._oc_session_id
-        assert oc_session_id is not None
+        session_id = self.session_id
+        assert session_id is not None
 
         # Send the prompt first — prompt_async returns immediately once the
         # server has accepted the message. Starting the SSE stream before
         # send() completes means we risk missing early events.
         await self._client.send(
-            oc_session_id,
+            session_id,
             message,
             model=model,
             agent=agent,
@@ -122,14 +136,14 @@ class OpenCodeSession:
             system=system,
         )
 
-        async for event in self._client.events(oc_session_id):
+        async for event in self._client.events(session_id):
             yield event
 
     async def abort(self) -> None:
         """Abort a running session."""
-        if self._oc_session_id is not None:
-            await self._client.post(f"/session/{self._oc_session_id}/abort", {})
+        if self.session_id is not None:
+            await self._client.post(f"/session/{self.session_id}/abort", {})
 
     async def close(self) -> None:
         """Release conversation-level resources."""
-        self._oc_session_id = None
+        self.session_id = None

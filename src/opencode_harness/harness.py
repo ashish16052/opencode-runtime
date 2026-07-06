@@ -92,8 +92,8 @@ class OpenCodeHarness:
         Args:
             workspace:   Logical tenant/workspace name, e.g. ``"acme"``.
             user_id:     Application user id, e.g. ``"u_123"``.
-            session_id:  External correlation id stored in metadata. OpenCode
-                         generates its own internal session id server-side.
+            session_id:  OpenCode server-side session ID. Pass an existing ID to
+                         resume a previous conversation; omit to start a new one.
             materials:   Per-session materials override. Falls back to
                          harness-level materials when not set.
             config:      Merged on top of harness-level config.
