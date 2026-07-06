@@ -163,6 +163,14 @@ class ServerManager:
 
         return registry_read(key)
 
+    def is_alive(self, key: str) -> bool:
+        """Return True if the server for key is running."""
+        from .registry import is_alive
+        from .registry import read as registry_read
+
+        entry = registry_read(key)
+        return entry is not None and is_alive(entry.pid)
+
     def list(self) -> list[tuple[RegistryEntry, bool]]:
         """Return all registry entries with their liveness status."""
         from .registry import is_alive
