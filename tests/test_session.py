@@ -1,7 +1,7 @@
 """
 Tests for OpenCodeSession against the real opencode server.
 
-Covers: session factory, raw_client wiring, oc_session_id, OpenCode session CRUD.
+Covers: session factory, raw_client wiring, session_id, OpenCode session CRUD.
 No model or agent calls — no API keys required.
 """
 
@@ -23,11 +23,6 @@ async def harness(tmp_path):
     await h.stop()
 
 
-def _client(h: OpenCodeHarness):
-    """Return the client from the first (default) server."""
-    return list(h._server_manager._servers.values())[0].client
-
-
 class TestSessionFactory:
     async def test_session_returns_opencodesession(self, harness):
         session = await harness.session(workspace="acme", user_id="u_1")
@@ -35,17 +30,19 @@ class TestSessionFactory:
         assert session.workspace == "acme"
         assert session.user_id == "u_1"
 
-    async def test_session_correlation_id(self, harness):
-        session = await harness.session(session_id="chat_456")
-        assert session.session_id == "chat_456"
+    async def test_session_id_starts_none(self, harness):
+        """session_id is None until first ask()/stream() creates the server-side session."""
+        session = await harness.session()
+        assert session.session_id is None
+
+    async def test_session_resume_id_stored(self, harness):
+        """Passing session_id stores it for resumption — skips POST /session on first use."""
+        session = await harness.session(session_id="ses_abc123")
+        assert session.session_id == "ses_abc123"
 
     async def test_session_raw_client_is_server_client(self, harness):
         session = await harness.session()
         assert session.raw_client is _client(harness)
-
-    async def test_session_oc_session_id_starts_none(self, harness):
-        session = await harness.session()
-        assert session._oc_session_id is None
 
     async def test_session_config_merged(self, harness):
         session = await harness.session(config={"model": "test/model"})
