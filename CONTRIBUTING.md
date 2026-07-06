@@ -3,7 +3,7 @@
 ## Dev setup
 
 ```bash
-git clone https://github.com/ashishmohite/opencode-harness
+git clone https://github.com/ashish16052/opencode-harness
 cd opencode-harness
 
 python3 -m venv venv
