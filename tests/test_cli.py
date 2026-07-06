@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import time
 
 import pytest
 
@@ -131,6 +132,12 @@ def test_stop_live_server(tmp_path):
 
     cmd_stop(ns(key=entry.key))
 
+    # Poll — CI runners may need a moment after SIGTERM for the OS to reap
+    deadline = time.time() + 5.0
+    while time.time() < deadline:
+        if not registry.is_alive(entry.pid):
+            break
+        time.sleep(0.1)
     assert not registry.is_alive(entry.pid)
     assert registry.read(entry.key) is None
 
@@ -166,6 +173,12 @@ def test_stop_all_kills_all(tmp_path):
 
     cmd_stop_all(ns())
 
+    # Poll — CI runners may need a moment after SIGTERM for the OS to reap
+    deadline = time.time() + 5.0
+    while time.time() < deadline:
+        if all(not registry.is_alive(pid) for pid in pids):
+            break
+        time.sleep(0.1)
     for pid in pids:
         assert not registry.is_alive(pid)
     assert registry.list_all() == []
@@ -195,6 +208,9 @@ def test_health_live_server(tmp_path, capsys):
     entries = registry.list_all()
     assert len(entries) == 1
     key = entries[0].key
+
+    # Brief pause — CI runners may still be finishing init after health check
+    time.sleep(1.0)
 
     cmd_health(ns(key=key))
     out = capsys.readouterr().out
