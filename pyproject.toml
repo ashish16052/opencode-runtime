@@ -1,7 +1,7 @@
 [project]
-name = "opencode-harness"
+name = "opencode-runtime"
 version = "0.3.0"
-description = "Managed OpenCode runtimes for multi-user backend apps."
+description = "Python runtime for deploying and managing OpenCode instances at scale."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "Apache-2.0"
@@ -10,8 +10,11 @@ authors = [
 ]
 keywords = [
   "opencode",
-  "agent harness",
   "agent runtime",
+  "multi-user",
+  "workspace isolation",
+  "lifecycle management",
+  "AI coding agent",
 ]
 classifiers = [
   "Development Status :: 3 - Alpha",
@@ -46,16 +49,16 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/ashish16052/opencode-harness"
-Repository = "https://github.com/ashish16052/opencode-harness"
-Issues = "https://github.com/ashish16052/opencode-harness/issues"
+Homepage = "https://github.com/ashish16052/opencode-runtime"
+Repository = "https://github.com/ashish16052/opencode-runtime"
+Issues = "https://github.com/ashish16052/opencode-runtime/issues"
 
 [project.scripts]
-opencode-harness = "opencode_harness.cli:main"
+opencode-runtime = "opencode_runtime.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/opencode_harness"]
-artifacts = ["src/opencode_harness/py.typed"]
+packages = ["src/opencode_runtime"]
+artifacts = ["src/opencode_runtime/py.typed"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
