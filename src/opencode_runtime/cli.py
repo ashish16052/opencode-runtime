@@ -1,12 +1,12 @@
 """
-CLI entry point for opencode-harness server management.
+CLI entry point for opencode-runtime instance management.
 
 Commands:
-    serve       Start an opencode server (detached)
-    ps          List all servers tracked in the registry
-    stop        Stop a server by key
-    stop-all    Stop all tracked servers
-    health      Check health of a server by key
+    serve       Start an OpenCode instance (detached)
+    ps          List all instances tracked in the registry
+    stop        Stop an instance by key
+    stop-all    Stop all tracked instances
+    health      Check health of an instance by key
 """
 
 from __future__ import annotations
@@ -101,7 +101,7 @@ async def _serve(args: argparse.Namespace) -> None:
         if manager.is_alive(key):
             sys.exit(
                 _yellow(f"● Server already running  id={existing.key}  pid={existing.pid}\n")
-                + _dim(f"  use: opencode-harness stop {existing.key}")
+                + _dim(f"  use: opencode-runtime stop {existing.key}")
             )
 
     server_dir: Path | None = None
@@ -135,8 +135,8 @@ async def _serve(args: argparse.Namespace) -> None:
     _row("PID", _dim(str(entry.pid)))
     _row("Project", _dim(_home(str(project_dir))))
     print()
-    print(_dim(f"  opencode-harness health {key}"))
-    print(_dim(f"  opencode-harness stop   {key}"))
+    print(_dim(f"  opencode-runtime health {key}"))
+    print(_dim(f"  opencode-runtime stop   {key}"))
 
 
 def cmd_serve(args: argparse.Namespace) -> None:
@@ -253,7 +253,7 @@ def cmd_health(args: argparse.Namespace) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        prog="opencode-harness", description="Manage opencode server processes."
+        prog="opencode-runtime", description="Manage OpenCode instance processes."
     )
     sub = parser.add_subparsers(dest="command", metavar="<command>")
     sub.required = True

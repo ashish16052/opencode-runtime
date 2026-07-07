@@ -1,12 +1,12 @@
 """
-Registry for tracking opencode server processes.
+Registry for tracking OpenCode instance processes.
 
-Each running server is represented by a JSON file at:
-    ~/.opencode-harness/servers/<key>.json
+Each running instance is represented by a JSON file at:
+    ~/.opencode-runtime/servers/<key>.json
 
-Used by both the CLI (opencode-harness serve/ps/stop) and the library
-(OpenCodeHarness) — the registry is the shared source of truth for all
-running servers regardless of how they were started.
+Used by both the CLI (opencode-runtime serve/ps/stop) and the library
+(OpenCodeRuntime) — the registry is the shared source of truth for all
+running instances regardless of how they were started.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-REGISTRY_DIR = Path.home() / ".opencode-harness" / "servers"
+REGISTRY_DIR = Path.home() / ".opencode-runtime" / "servers"
 
 
 @dataclass

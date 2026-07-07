@@ -1,16 +1,16 @@
 """
-opencode-harness: a thin OpenCode harness for backend applications.
+opencode-runtime: runtime infrastructure for multi-user OpenCode deployments.
 """
 
 __version__ = "0.3.0"
 
 from .event import OpenCodeEvent
-from .harness import OpenCodeHarness
+from .runtime import OpenCodeRuntime
 from .response import OpenCodeResponse
 from .session import OpenCodeSession
 
 __all__ = [
-    "OpenCodeHarness",
+    "OpenCodeRuntime",
     "OpenCodeSession",
     "OpenCodeEvent",
     "OpenCodeResponse",

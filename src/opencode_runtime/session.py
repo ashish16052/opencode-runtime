@@ -13,7 +13,7 @@ class OpenCodeSession:
     """A conversation session with an OpenCode server.
 
     Sessions are self-contained — they hold their own client, config, and
-    conversation state. Obtain via ``OpenCodeHarness.session()``.
+    conversation state.     Obtain via ``OpenCodeRuntime.session()``.
 
     Each session maps to a single OpenCode server-side session. Calling
     ``ask()`` or ``stream()`` multiple times on the same
@@ -22,7 +22,7 @@ class OpenCodeSession:
     between turns.
 
     To start a new independent conversation, obtain a new session via
-    ``OpenCodeHarness.session()``.
+    ``OpenCodeRuntime.session()``.
 
     Args:
         client:      The HTTP client for the server backing this session.

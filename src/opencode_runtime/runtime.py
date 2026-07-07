@@ -9,19 +9,19 @@ if t.TYPE_CHECKING:
     from .session import OpenCodeSession
 
 
-class OpenCodeHarness:
-    """Lifecycle manager and session factory for opencode-harness.
+class OpenCodeRuntime:
+    """Lifecycle manager and session factory for OpenCode Runtime.
 
-    ``OpenCodeHarness`` owns the public API: it accepts configuration,
-    manages the server lifecycle via ``ServerManager``, and produces
-    ``OpenCodeSession`` objects. All process and runtime concerns are
-    delegated to ``ServerManager``.
+    ``OpenCodeRuntime`` is the entry point for deploying OpenCode in a
+    multi-user backend. It manages isolated workspace environments,
+    OpenCode instance lifecycles, and session routing so that each user
+    gets a fully isolated runtime without any shared state.
 
     Args:
         project_dir:  The project directory OpenCode should run against.
-        runtime_dir:  Where opencode-harness stores managed runtime state.
-                      When set, each session gets an isolated server with
-                      its own HOME, config, and materials under
+        runtime_dir:  Where OpenCode Runtime stores managed workspace state.
+                      When set, each session gets an isolated OpenCode instance
+                      with its own HOME, config, and conversation history under
                       ``runtime_dir/servers/<key>/``.
                       When not set, OpenCode runs with the user's real
                       environment and discovers config normally.
@@ -30,8 +30,8 @@ class OpenCodeHarness:
                       per-session.
         config:       Raw OpenCode config dict. Merged with per-session
                       config (session config takes precedence).
-        env:          Extra environment variables passed to the opencode
-                      server process.
+        env:          Extra environment variables passed to the OpenCode
+                      instance process.
     """
 
     def __init__(
@@ -54,7 +54,7 @@ class OpenCodeHarness:
     # Lifecycle
     # ------------------------------------------------------------------
 
-    async def __aenter__(self) -> OpenCodeHarness:
+    async def __aenter__(self) -> OpenCodeRuntime:
         await self.start()
         return self
 
@@ -62,11 +62,11 @@ class OpenCodeHarness:
         await self.stop()
 
     async def start(self) -> None:
-        """Start the default server eagerly so the harness is ready to use."""
+        """Start the default OpenCode instance eagerly so the runtime is ready to use."""
         await self.session()
 
     async def stop(self) -> None:
-        """Shut down all managed opencode server processes."""
+        """Shut down all managed OpenCode instance processes."""
         await self._server_manager.stop_all()
 
     # ------------------------------------------------------------------
@@ -83,11 +83,11 @@ class OpenCodeHarness:
         config: dict[str, t.Any] | None = None,
         env: dict[str, str] | None = None,
     ) -> OpenCodeSession:
-        """Create a session backed by this harness.
+        """Create a session backed by this runtime.
 
         Each unique combination of workspace, user_id, materials, and config
-        maps to a dedicated opencode server process. The server is started on
-        first use and reused for subsequent sessions with the same key.
+        maps to a dedicated OpenCode instance process. The instance is started
+        on first use and reused for subsequent sessions with the same key.
 
         Args:
             workspace:   Logical tenant/workspace name, e.g. ``"acme"``.
@@ -95,9 +95,9 @@ class OpenCodeHarness:
             session_id:  OpenCode server-side session ID. Pass an existing ID to
                          resume a previous conversation; omit to start a new one.
             materials:   Per-session materials override. Falls back to
-                         harness-level materials when not set.
-            config:      Merged on top of harness-level config.
-            env:         Merged on top of harness-level env.
+                         runtime-level materials when not set.
+            config:      Merged on top of runtime-level config.
+            env:         Merged on top of runtime-level env.
         """
         from .session import OpenCodeSession
 

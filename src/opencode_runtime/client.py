@@ -13,7 +13,7 @@ from .exceptions import OpenCodeServerError, OpenCodeTimeoutError
 class OpenCodeClient:
     """Minimal HTTP/SSE client for the OpenCode server.
 
-    Covers only what the harness needs to function:
+    Covers only what the runtime needs to function:
     - health check
     - fire-and-forget message send
     - SSE event stream
@@ -88,7 +88,7 @@ class OpenCodeClient:
                 ) from exc
 
     # ------------------------------------------------------------------
-    # The three things the harness actually needs
+    # The three things the runtime actually needs
     # ------------------------------------------------------------------
 
     async def health(self) -> dict[str, t.Any]:
@@ -141,10 +141,10 @@ class OpenCodeClient:
     async def events(self, session_id: str) -> t.AsyncIterator[OpenCodeEvent]:
         """GET /global/event — SSE bus filtered to ``session_id``.
 
-        Yields every :class:`~opencode_harness.event.OpenCodeEvent` that
+        Yields every :class:`~opencode_runtime.event.OpenCodeEvent` that
         OpenCode emits for this session and terminates on a terminal event.
 
-        The harness does **no interpretation** — all events are forwarded as-is
+        The runtime does **no interpretation** — all events are forwarded as-is
         so callers can handle whatever OpenCode emits (text deltas, tool calls,
         thinking, permission requests, status updates, etc.).
 

@@ -1,7 +1,7 @@
 """
 Internal server lifecycle helpers.
 
-All symbols in this module are private to opencode-harness.
+All symbols in this module are private to opencode-runtime.
 Nothing here is exported in __all__.
 """
 
@@ -26,7 +26,7 @@ from .registry import RegistryEntry
 
 @dataclass
 class _ManagedServer:
-    """A running opencode server process tracked by the harness."""
+    """A running opencode server process tracked by the runtime."""
 
     key: str
     process: asyncio.subprocess.Process | None  # set during _start(); None from get_or_start()
@@ -73,7 +73,7 @@ def _prepare_dir(
     materials: str | Path | list[str | Path] | None,
 ) -> None:
     """Write opencode.json and overlay materials into server_dir."""
-    from .exceptions import OpenCodeHarnessError
+    from .exceptions import OpenCodeRuntimeError
 
     if config:
         (server_dir / "opencode.json").write_text(
@@ -86,7 +86,7 @@ def _prepare_dir(
         for src in paths:
             src = Path(src).resolve()
             if not src.exists():
-                raise OpenCodeHarnessError(f"materials path does not exist: {src}")
+                raise OpenCodeRuntimeError(f"materials path does not exist: {src}")
             if src.is_dir():
                 for item in src.iterdir():
                     dest = server_dir / item.name
@@ -146,11 +146,11 @@ def _compute_runtime_key(
 
 
 class ServerManager:
-    """Manages a pool of opencode server processes.
+    """Manages a pool of OpenCode instance processes.
 
     Each unique combination of workspace, user_id, project_dir, materials,
-    and config gets its own isolated server process. Servers are started on
-    demand and reused when the same key is requested again.
+    and config gets its own isolated OpenCode instance. Instances are started
+    on demand and reused when the same key is requested again.
 
     The registry is the single source of truth. There is no in-memory cache —
     every call consults the registry so that external actors (CLI stop-all,
@@ -304,7 +304,7 @@ class ServerManager:
         workspace: str | None = None,
         user_id: str | None = None,
     ) -> _ManagedServer:
-        """Start a new opencode server and return a _ManagedServer."""
+        """Start a new OpenCode instance and return a _ManagedServer."""
         from .client import OpenCodeClient
         from .exceptions import OpenCodeNotFoundError
 
