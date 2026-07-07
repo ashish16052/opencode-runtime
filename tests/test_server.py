@@ -9,8 +9,8 @@ from pathlib import Path
 
 import pytest
 
-import opencode_harness.registry as registry
-from opencode_harness.server import (
+import opencode_runtime.registry as registry
+from opencode_runtime.server import (
     ServerManager,
     _ManagedServer,
     _compute_runtime_key,
@@ -307,7 +307,7 @@ class TestServerManagerRegistry:
     async def test_stale_registry_entry_cleaned_on_attach(self, tmp_path, monkeypatch):
         monkeypatch.setattr(registry, "REGISTRY_DIR", tmp_path / "reg")
         # Write a stale entry with a dead PID
-        from opencode_harness.registry import RegistryEntry, now_iso
+        from opencode_runtime.registry import RegistryEntry, now_iso
 
         key = _compute_runtime_key(None, None, tmp_path, None, {})
         registry.write(
@@ -405,8 +405,12 @@ class TestServerManagerQuery:
         manager = ServerManager()
         key = _compute_runtime_key(None, None, tmp_path, None, {})
         await manager.get_or_start(
-            key=key, project_dir=tmp_path, server_dir=tmp_path / "srv",
-            materials=None, config={}, env={},
+            key=key,
+            project_dir=tmp_path,
+            server_dir=tmp_path / "srv",
+            materials=None,
+            config={},
+            env={},
         )
         entry = manager.find(key)
         assert entry is not None
@@ -422,8 +426,12 @@ class TestServerManagerQuery:
         manager = ServerManager()
         key = _compute_runtime_key(None, None, tmp_path, None, {})
         await manager.get_or_start(
-            key=key, project_dir=tmp_path, server_dir=tmp_path / "srv",
-            materials=None, config={}, env={},
+            key=key,
+            project_dir=tmp_path,
+            server_dir=tmp_path / "srv",
+            materials=None,
+            config={},
+            env={},
         )
         assert manager.is_alive(key) is True
         await manager.stop_all()
@@ -438,12 +446,20 @@ class TestServerManagerQuery:
         k1 = _compute_runtime_key("acme", None, tmp_path, None, {})
         k2 = _compute_runtime_key("beta", None, tmp_path, None, {})
         await manager.get_or_start(
-            key=k1, project_dir=tmp_path, server_dir=tmp_path / "acme",
-            materials=None, config={}, env={},
+            key=k1,
+            project_dir=tmp_path,
+            server_dir=tmp_path / "acme",
+            materials=None,
+            config={},
+            env={},
         )
         await manager.get_or_start(
-            key=k2, project_dir=tmp_path, server_dir=tmp_path / "beta",
-            materials=None, config={}, env={},
+            key=k2,
+            project_dir=tmp_path,
+            server_dir=tmp_path / "beta",
+            materials=None,
+            config={},
+            env={},
         )
         entries = manager.list()
         assert len(entries) == 2
@@ -461,15 +477,20 @@ class TestServerManagerQuery:
         manager = ServerManager()
         key = _compute_runtime_key(None, None, tmp_path, None, {})
         await manager.get_or_start(
-            key=key, project_dir=tmp_path, server_dir=tmp_path / "srv",
-            materials=None, config={}, env={},
+            key=key,
+            project_dir=tmp_path,
+            server_dir=tmp_path / "srv",
+            materials=None,
+            config={},
+            env={},
         )
         result = await manager.health(key)
         assert result["healthy"] is True
         await manager.stop_all()
 
     async def test_health_raises_for_missing_key(self, tmp_path, monkeypatch):
-        from opencode_harness.exceptions import OpenCodeServerError
+        from opencode_runtime.exceptions import OpenCodeServerError
+
         monkeypatch.setattr(registry, "REGISTRY_DIR", tmp_path / "reg")
         with pytest.raises(OpenCodeServerError):
             await ServerManager().health("doesnotexist")
@@ -479,8 +500,12 @@ class TestServerManagerQuery:
         manager = ServerManager()
         key = _compute_runtime_key(None, None, tmp_path, None, {})
         await manager.get_or_start(
-            key=key, project_dir=tmp_path, server_dir=tmp_path / "srv",
-            materials=None, config={}, env={},
+            key=key,
+            project_dir=tmp_path,
+            server_dir=tmp_path / "srv",
+            materials=None,
+            config={},
+            env={},
         )
         was_alive = await manager.stop(key)
         assert was_alive is True
@@ -491,13 +516,21 @@ class TestServerManagerQuery:
         assert was_alive is False
 
     async def test_stop_returns_false_for_dead_process(self, tmp_path, monkeypatch):
-        from opencode_harness.registry import RegistryEntry, now_iso
+        from opencode_runtime.registry import RegistryEntry, now_iso
+
         monkeypatch.setattr(registry, "REGISTRY_DIR", tmp_path / "reg")
         key = _compute_runtime_key(None, None, tmp_path, None, {})
-        registry.write(RegistryEntry(
-            key=key, pid=99999999, port=54321, password="x",
-            project_dir=str(tmp_path), server_dir=None, started_at=now_iso(),
-        ))
+        registry.write(
+            RegistryEntry(
+                key=key,
+                pid=99999999,
+                port=54321,
+                password="x",
+                project_dir=str(tmp_path),
+                server_dir=None,
+                started_at=now_iso(),
+            )
+        )
         was_alive = await ServerManager().stop(key)
         assert was_alive is False
         assert registry.read(key) is None  # still cleaned up

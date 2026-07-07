@@ -14,9 +14,9 @@ import time
 
 import pytest
 
-import opencode_harness.registry as registry
-from opencode_harness.cli import cmd_health, cmd_ps, cmd_serve, cmd_stop, cmd_stop_all
-from opencode_harness.registry import RegistryEntry
+import opencode_runtime.registry as registry
+from opencode_runtime.cli import cmd_health, cmd_ps, cmd_serve, cmd_stop, cmd_stop_all
+from opencode_runtime.registry import RegistryEntry
 
 
 # ---------------------------------------------------------------------------
@@ -296,7 +296,7 @@ def test_serve_duplicate_key_exits(tmp_path):
 
 def test_serve_stale_entry_cleaned_and_restarted(tmp_path):
     """Dead PID in registry — serve should clean it up and start fresh."""
-    from opencode_harness.server import _compute_runtime_key
+    from opencode_runtime.server import _compute_runtime_key
     from pathlib import Path
 
     # Compute the same key serve will use
