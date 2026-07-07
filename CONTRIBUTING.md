@@ -1,10 +1,10 @@
-# Contributing to opencode-harness
+# Contributing to opencode-runtime
 
 ## Dev setup
 
 ```bash
-git clone https://github.com/ashish16052/opencode-harness
-cd opencode-harness
+git clone https://github.com/ashish16052/opencode-runtime
+cd opencode-runtime
 
 python3 -m venv venv
 source venv/bin/activate
@@ -28,7 +28,7 @@ ruff format .
 ## Type check
 
 ```bash
-mypy src/opencode_harness
+mypy src/opencode_runtime
 ```
 
 ## Build the package
@@ -41,6 +41,6 @@ python -m twine check dist/*
 ## Project layout
 
 ```
-src/opencode_harness/   library source
+src/opencode_runtime/   library source
 tests/                  unit tests
 ```
