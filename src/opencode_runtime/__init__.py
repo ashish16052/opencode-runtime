@@ -2,7 +2,7 @@
 opencode-runtime: runtime infrastructure for multi-user OpenCode deployments.
 """
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 from .event import OpenCodeEvent
 from .runtime import OpenCodeRuntime
