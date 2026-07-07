@@ -1,11 +1,34 @@
-# opencode-harness
+# opencode-runtime
 
-OpenCode is built for terminals. `opencode-harness` makes it production-ready for Python backends — managed lifecycle, isolated sessions, and streaming out of the box.
+Python runtime for deploying and managing OpenCode instances at scale.
+
+---
+
+Running OpenCode for a single developer is simple.
+
+Running OpenCode for many users, isolated repositories, persistent workspaces,
+multiple OpenCode instances, and production workloads requires infrastructure.
+
+OpenCode Runtime provides that infrastructure.
+
+**Use this when you need to:**
+- Run OpenCode for multiple users or teams from a Python backend
+- Give each user an isolated workspace with no shared state
+- Embed OpenCode in a SaaS product or internal platform
+- Manage OpenCode instance lifecycles (start, health-check, reuse, stop)
+- Stream OpenCode responses to your application in real time
+
+**What it provides:**
+- **One instance per user** — automatically started, isolated, and reused
+- **Filesystem isolation** — each user gets a private workspace; no shared state
+- **Lifecycle management** — health-checked startup, graceful shutdown, stale process recovery
+- **Streaming** — consume every OpenCode event as it arrives
+- **Native OpenCode config** — your existing `opencode.json`, agents, and skills drop in unchanged
 
 ## Install
 
 ```sh
-pip install opencode-harness
+pip install opencode-runtime
 ```
 
 Requires `opencode` on PATH:
@@ -19,10 +42,10 @@ npm install -g opencode-ai
 ### Ask
 
 ```python
-from opencode_harness import OpenCodeHarness
+from opencode_runtime import OpenCodeRuntime
 
-async with OpenCodeHarness() as h:
-    session = await h.session()
+async with OpenCodeRuntime() as r:
+    session = await r.session()
     response = await session.ask("Explain this repo")
     print(response.text)
 ```
@@ -32,12 +55,12 @@ async with OpenCodeHarness() as h:
 Pass a raw `opencode.json` dict to control model, permissions, and any other OpenCode-native setting:
 
 ```python
-from opencode_harness import OpenCodeHarness
+from opencode_runtime import OpenCodeRuntime
 
-async with OpenCodeHarness(
+async with OpenCodeRuntime(
     config={"model": "anthropic/claude-sonnet-4-5", "permission": {"bash": "deny"}},
-) as h:
-    session = await h.session()
+) as r:
+    session = await r.session()
     response = await session.ask("Analyse the architecture")
     print(response.text)
 ```
@@ -47,10 +70,10 @@ async with OpenCodeHarness(
 Pass a directory of OpenCode-native files — `AGENTS.md`, `opencode.json`, `.opencode/skills/`, etc. — and they are copied into the server before it starts:
 
 ```python
-from opencode_harness import OpenCodeHarness
+from opencode_runtime import OpenCodeRuntime
 
-async with OpenCodeHarness(materials="./opencode-materials") as h:
-    session = await h.session()
+async with OpenCodeRuntime(materials="./opencode-materials") as r:
+    session = await r.session()
     response = await session.ask("Follow the instructions in AGENTS.md")
     print(response.text)
 ```
@@ -60,14 +83,14 @@ async with OpenCodeHarness(materials="./opencode-materials") as h:
 Set `project_dir` and `runtime_dir` to give the server its own `HOME`, config, and conversation history — separate from your real environment:
 
 ```python
-from opencode_harness import OpenCodeHarness
+from opencode_runtime import OpenCodeRuntime
 
-async with OpenCodeHarness(
+async with OpenCodeRuntime(
     project_dir="/path/to/project",
-    runtime_dir=".opencode-harness",
+    runtime_dir=".opencode-runtime",
     materials="./opencode-materials",
-) as h:
-    session = await h.session()
+) as r:
+    session = await r.session()
     response = await session.ask("What does this project do?") 
     print(response.text)
 ```
@@ -77,10 +100,10 @@ async with OpenCodeHarness(
 Each unique `user_id` gets its own isolated server and conversation history:
 
 ```python
-from opencode_harness import OpenCodeHarness
+from opencode_runtime import OpenCodeRuntime
 
-async with OpenCodeHarness(runtime_dir=".opencode-harness") as h:
-    session = await h.session(user_id="u_1")
+async with OpenCodeRuntime(runtime_dir=".opencode-runtime") as r:
+    session = await r.session(user_id="u_1")
     response = await session.ask("What does this project do?")
     print(response.text)
 ```
@@ -90,11 +113,11 @@ async with OpenCodeHarness(runtime_dir=".opencode-harness") as h:
 Add `workspace` to isolate by tenant. Different `(workspace, user_id)` → different server. Same combination → server reused:
 
 ```python
-from opencode_harness import OpenCodeHarness
+from opencode_runtime import OpenCodeRuntime
 
-async with OpenCodeHarness(runtime_dir=".opencode-harness") as h:
-    s1 = await h.session(workspace="org_a", user_id="u_1")
-    s2 = await h.session(workspace="org_b", user_id="u_2")
+async with OpenCodeRuntime(runtime_dir=".opencode-runtime") as r:
+    s1 = await r.session(workspace="org_a", user_id="u_1")
+    s2 = await r.session(workspace="org_b", user_id="u_2")
     r1 = await s1.ask("What does this project do?")
     r2 = await s2.ask("List the main dependencies")
 ```
@@ -104,10 +127,10 @@ async with OpenCodeHarness(runtime_dir=".opencode-harness") as h:
 Multiple `ask()` calls on the same session continue the same conversation — OpenCode keeps the full history server-side:
 
 ```python
-from opencode_harness import OpenCodeHarness
+from opencode_runtime import OpenCodeRuntime
 
-async with OpenCodeHarness() as h:
-    session = await h.session()
+async with OpenCodeRuntime() as r:
+    session = await r.session()
     await session.ask("Explain this repo")
     await session.ask("Which file should I start with?")  # has full context
 ```
@@ -116,14 +139,14 @@ To resume a conversation in a future session, store `session.session_id` and pas
 
 ```python
 # First session
-async with OpenCodeHarness() as h:
-    session = await h.session()
+async with OpenCodeRuntime() as r:
+    session = await r.session()
     await session.ask("Explain this repo")
     saved_id = session.session_id  # persist this
 
 # Later — resumes the same conversation
-async with OpenCodeHarness() as h:
-    session = await h.session(session_id=saved_id)
+async with OpenCodeRuntime() as r:
+    session = await r.session(session_id=saved_id)
     await session.ask("What were we discussing?")
 ```
 
@@ -132,10 +155,10 @@ async with OpenCodeHarness() as h:
 Access any OpenCode server endpoint directly:
 
 ```python
-from opencode_harness import OpenCodeHarness
+from opencode_runtime import OpenCodeRuntime
 
-async with OpenCodeHarness() as h:
-    session = await h.session()
+async with OpenCodeRuntime() as r:
+    session = await r.session()
     agents = await session.raw_client.get("/agent")
     mcp    = await session.raw_client.get("/mcp")
 ```
@@ -148,10 +171,10 @@ text-bearing events, `None` otherwise), and `raw` (full server payload). See
 the [OpenCode server docs](https://opencode.ai/docs/server#events) for all event types.
 
 ```python
-from opencode_harness import OpenCodeHarness
+from opencode_runtime import OpenCodeRuntime
 
-async with OpenCodeHarness() as h:
-    session = await h.session()
+async with OpenCodeRuntime() as r:
+    session = await r.session()
     async for event in session.stream("Review this PR"):
         if event.type == "message.part.delta" and event.text:
             print(event.text, end="", flush=True)
@@ -159,12 +182,12 @@ async with OpenCodeHarness() as h:
 
 ## CLI
 
-`opencode-harness` ships with a CLI for managing opencode servers from the terminal. Useful for inspecting what your application is running, debugging sessions, or managing servers independently.
+`opencode-runtime` ships with a CLI for managing opencode servers from the terminal. Useful for inspecting what your application is running, debugging sessions, or managing servers independently.
 
 ### Start a server
 
 ```sh
-opencode-harness serve
+opencode-runtime serve
 ```
 
 The server runs in the background. Use `ps`, `stop`, and `health` to manage it.
@@ -174,14 +197,14 @@ The server runs in the background. Use `ps`, `stop`, and `health` to manage it.
 Each unique `(workspace, user-id)` combination gets its own isolated server:
 
 ```sh
-opencode-harness serve --workspace org_a --user-id u_1
-opencode-harness serve --workspace org_b --user-id u_2
+opencode-runtime serve --workspace org_a --user-id u_1
+opencode-runtime serve --workspace org_b --user-id u_2
 ```
 
 ### List servers
 
 ```sh
-opencode-harness ps
+opencode-runtime ps
 ```
 
 ```
@@ -194,19 +217,19 @@ opencode-harness ps
 ### Check health
 
 ```sh
-opencode-harness health 39dce5beb4debfaa
+opencode-runtime health 39dce5beb4debfaa
 ```
 
 ### Stop a server
 
 ```sh
-opencode-harness stop 39dce5beb4debfaa
+opencode-runtime stop 39dce5beb4debfaa
 ```
 
 ### Stop all servers
 
 ```sh
-opencode-harness stop-all
+opencode-runtime stop-all
 ```
 
 ### Library + CLI
@@ -214,19 +237,19 @@ opencode-harness stop-all
 Start a server from Python, then inspect and manage it from the terminal:
 
 ```python
-from opencode_harness import OpenCodeHarness
+from opencode_runtime import OpenCodeRuntime
 
-async with OpenCodeHarness() as h:
-    session = await h.session()
+async with OpenCodeRuntime() as r:
+    session = await r.session()
     response = await session.ask("Review this PR")
     print(response.text)
 ```
 
 ```sh
 # while app.py is running
-opencode-harness ps
-opencode-harness health 39dce5beb4debfaa
-opencode-harness stop   39dce5beb4debfaa
+opencode-runtime ps
+opencode-runtime health 39dce5beb4debfaa
+opencode-runtime stop   39dce5beb4debfaa
 ```
 
 ## Requirements
