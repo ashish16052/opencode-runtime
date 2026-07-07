@@ -37,8 +37,8 @@ MANIFEST
 *.tar.gz
 *.whl
 
-# opencode-harness runtime state
-.opencode-harness/
+# opencode-runtime runtime state
+.opencode-runtime/
 
 # macOS
 .DS_Store
