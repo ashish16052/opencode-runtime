@@ -5,8 +5,8 @@ import stat
 
 import pytest
 
-import opencode_harness.registry as registry
-from opencode_harness.registry import RegistryEntry
+import opencode_runtime.registry as registry
+from opencode_runtime.registry import RegistryEntry
 
 
 @pytest.fixture(autouse=True)

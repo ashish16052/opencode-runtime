@@ -10,14 +10,14 @@ import base64
 import httpx
 import pytest
 
-from opencode_harness import OpenCodeHarness
+from opencode_runtime import OpenCodeRuntime
 
 pytestmark = pytest.mark.asyncio
 
 
 @pytest.fixture
-async def harness(tmp_path):
-    h = OpenCodeHarness(
+async def runtime(tmp_path):
+    h = OpenCodeRuntime(
         project_dir=tmp_path,
         runtime_dir=tmp_path / "runtime",
     )
@@ -27,8 +27,8 @@ async def harness(tmp_path):
 
 
 @pytest.fixture
-async def client(harness):
-    session = await harness.session()
+async def client(runtime):
+    session = await runtime.session()
     return session.raw_client
 
 
