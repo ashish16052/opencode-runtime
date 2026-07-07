@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-07
+
+### Changed
+- Renamed project from `opencode-harness` to `opencode-runtime` — package, imports, CLI, and registry directory all updated
+- `OpenCodeHarness` → `OpenCodeRuntime`, `OpenCodeHarnessError` → `OpenCodeRuntimeError`
+- CLI command renamed from `opencode-harness` to `opencode-runtime`
+- On-disk registry moved from `~/.opencode-harness/servers/` to `~/.opencode-runtime/servers/`
+- Install: `pip install opencode-runtime`
+
+See [MIGRATION.md](./MIGRATION.md) for full migration steps from `opencode-harness`.
+
 ## [0.3.0] - 2026-07-07
 
 ### Added
