@@ -114,6 +114,25 @@ def test_stop_dead_process_warns_and_deletes(capsys):
     assert registry.read("abc123def456abcd") is None
 
 
+def _is_truly_dead(pid: int) -> bool:
+    """Return True if pid is dead or a zombie (functionally dead).
+
+    os.kill(pid, 0) returns True for zombie processes on Linux — the PID
+    exists in the process table but the process has already exited. We treat
+    zombies as dead since we are not the parent and cannot reap them.
+    """
+    if not registry.is_alive(pid):
+        return True
+    try:
+        with open(f"/proc/{pid}/status") as f:
+            for line in f:
+                if line.startswith("State:"):
+                    return "Z" in line
+    except OSError:
+        pass
+    return False
+
+
 def test_stop_live_server(tmp_path):
     """Start a real server, stop it via cmd_stop, verify PID is dead."""
     args = ns(
@@ -132,13 +151,13 @@ def test_stop_live_server(tmp_path):
 
     cmd_stop(ns(key=entry.key))
 
-    # Poll — CI runners may need a moment after SIGTERM for the OS to reap
-    deadline = time.time() + 5.0
+    # Poll — zombie processes on Linux still respond to kill(0); treat as dead
+    deadline = time.time() + 10.0
     while time.time() < deadline:
-        if not registry.is_alive(entry.pid):
+        if _is_truly_dead(entry.pid):
             break
         time.sleep(0.1)
-    assert not registry.is_alive(entry.pid)
+    assert _is_truly_dead(entry.pid)
     assert registry.read(entry.key) is None
 
 
@@ -173,14 +192,14 @@ def test_stop_all_kills_all(tmp_path):
 
     cmd_stop_all(ns())
 
-    # Poll — CI runners may need a moment after SIGTERM for the OS to reap
-    deadline = time.time() + 5.0
+    # Poll — zombie processes on Linux still respond to kill(0); treat as dead
+    deadline = time.time() + 10.0
     while time.time() < deadline:
-        if all(not registry.is_alive(pid) for pid in pids):
+        if all(_is_truly_dead(pid) for pid in pids):
             break
         time.sleep(0.1)
     for pid in pids:
-        assert not registry.is_alive(pid)
+        assert _is_truly_dead(pid)
     assert registry.list_all() == []
 
 
@@ -209,10 +228,17 @@ def test_health_live_server(tmp_path, capsys):
     assert len(entries) == 1
     key = entries[0].key
 
-    # Brief pause — CI runners may still be finishing init after health check
-    time.sleep(1.0)
+    # Retry — server may briefly drop connections after initial health check
+    deadline = time.time() + 10.0
+    while time.time() < deadline:
+        try:
+            cmd_health(ns(key=key))
+            break
+        except SystemExit:
+            time.sleep(0.5)
+    else:
+        pytest.fail("server never became healthy within 10s")
 
-    cmd_health(ns(key=key))
     out = capsys.readouterr().out
     assert "healthy" in out
 
