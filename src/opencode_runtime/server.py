@@ -327,7 +327,7 @@ class ServerManager:
         if server_dir is not None:
             process_env["HOME"] = str(server_dir)
             process_env["TMPDIR"] = str(server_dir / "tmp")
-            process_env["OPENCODE_CONFIG_HOME"] = str(server_dir)
+            process_env["OPENCODE_CONFIG"] = str(server_dir / "opencode.json")
 
         if server_dir is not None:
             log_file = open(server_dir / "opencode.log", "ab")
