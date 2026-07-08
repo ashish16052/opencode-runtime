@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-07-09
+
+### Fixed
+- `server.py`: set `OPENCODE_CONFIG` env var instead of the unrecognised `OPENCODE_CONFIG_HOME` — without this fix the `config` dict (model, permissions, etc.) was never read by the opencode binary, silently ignored every time
+- `client.py`: SSE stream now terminates only on `session.idle` or `session.error`; previously `session.status {type: "idle"}` caused the generator to exit early, dropping any events that followed — including `permission.asked`
+- `session.py`: `ask()` now propagates the real server error message from `event.raw["properties"]["error"]`; previously it always raised the generic fallback `"unknown error from opencode server"` because `event.text` is always `None` for `session.error` events
+
 ## [0.4.0] - 2026-07-07
 
 ### Changed
