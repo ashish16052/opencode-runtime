@@ -38,7 +38,7 @@ MANIFEST
 *.whl
 
 # opencode-runtime runtime state
-.opencode-runtime/
+.opencode-runtime/*
 
 # macOS
 .DS_Store
