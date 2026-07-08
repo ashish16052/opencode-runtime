@@ -77,7 +77,10 @@ class OpenCodeSession:
         async for event in self.stream(message, **kwargs):
             raw_events.append(event.raw)
             if event.type == "session.error":
-                raise OpenCodeServerError(event.text or "unknown error from opencode server")
+                props = (event.raw or {}).get("properties") or {}
+                err = props.get("error") or {}
+                msg = (err.get("data") or {}).get("message") or err.get("name") or "unknown error"
+                raise OpenCodeServerError(msg)
             if event.type == "message.part.delta" and event.text:
                 text += event.text
 
