@@ -222,7 +222,3 @@ class OpenCodeClient:
                         return
                     if event_type == "session.error":
                         return
-                    if event_type == "session.status":
-                        status = props.get("status", {})
-                        if isinstance(status, dict) and status.get("type") == "idle":
-                            return
