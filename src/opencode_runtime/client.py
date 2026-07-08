@@ -154,7 +154,7 @@ class OpenCodeClient:
           delta string when ``properties.field == "text"``.
         * ``message.part.updated`` — full part snapshot (text, tool, thinking,
           …); ``event.text`` is the text content when ``part.type == "text"``.
-        * ``session.status`` — status change (e.g. ``{type: "running"}``).
+        * ``session.status`` — status change (e.g. ``{type: "busy"}``).
         * ``session.idle`` — terminal; model finished.
         * ``session.error`` — terminal; something went wrong.
         * ``permission.asked`` — tool permission request; caller must handle.

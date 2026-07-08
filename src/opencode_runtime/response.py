@@ -9,7 +9,7 @@ class OpenCodeResponse:
     """Collected response from a completed ask() call.
 
     Attributes:
-        text:  Full assistant text, concatenated from all message.delta events.
+        text:  Full assistant text, concatenated from all message.part.delta events.
         raw:   List of raw event objects received during the session, in order.
                Use this as an escape hatch when you need parts beyond plain text.
     """
