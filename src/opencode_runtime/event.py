@@ -20,8 +20,3 @@ class OpenCodeEvent:
     type: str
     text: str | None = None
     raw: Any = None
-
-    def to_sse(self) -> str:
-        """Format as a Server-Sent Events string suitable for HTTP streaming."""
-        data = self.text or ""
-        return f"event: {self.type}\ndata: {data}\n\n"
