@@ -147,6 +147,6 @@ class OpenCodeSession:
         if self.session_id is not None:
             await self._client.post(f"/session/{self.session_id}/abort", {})
 
-    async def close(self) -> None:
-        """Release conversation-level resources."""
+    async def reset(self) -> None:
+        """Forget the current conversation. The next ask()/stream() call starts a new one."""
         self.session_id = None
