@@ -11,11 +11,11 @@ opencode-runtime ps
 ```
 
 ```
-  ID                  PID    PORT    STATUS     UPTIME    WORKSPACE   USER    PROJECT
-  ──────────────────────────────────────────────────────────────────────────────────
-  39dce5beb4debfaa   12051   58409   ● alive    Up 5m     org_a       u_1     ~/Developer/myproject
-  81fa29acb3e9210f   12088   58411   ● alive    Up 3m     org_b       u_2     ~/Developer/myproject
-  c3f2a1d9e8b74f05   13204   58413   ● alive    Up 1h     org_c       u_3     ~/Developer/myproject
+  ID                  PID    PORT    STATUS      UPTIME    WORKSPACE   USER    PROJECT
+  ───────────────────────────────────────────────────────────────────────────────────
+  39dce5beb4debfaa   12051   58409   ● running   5m        org_a       u_1     ~/Developer/myproject
+  81fa29acb3e9210f   12088   58411   ● running   3m        org_b       u_2     ~/Developer/myproject
+  c3f2a1d9e8b74f05   13204   58413   ● running   1h        org_c       u_3     ~/Developer/myproject
 ```
 
 Every server your Python app has started — across all users and workspaces — is visible here. PID, port, uptime, which tenant, which user, which project. No guessing, no digging through logs.
@@ -32,6 +32,26 @@ Pipe it into your alerting:
 
 ```sh
 opencode-runtime health 39dce5beb4debfaa || pagerduty-alert "opencode server down"
+```
+
+## Inspect a server in detail
+
+`health` tells you if a server is up; `inspect` tells you everything else — uptime, idle time, runtime version, log file location:
+
+```sh
+opencode-runtime inspect 39dce5beb4debfaa
+```
+
+```
+  ID         39dce5beb4debfaa
+  Status     ● running
+  Project    ~/Developer/myproject
+  Workspace  org_a
+  User       u_1
+  PID        12051
+  Port       58409
+  Uptime     5m 12s
+  Last used  30s ago
 ```
 
 ## Start a server manually
@@ -95,5 +115,6 @@ deploy.sh
 | `opencode-runtime ps` | List all running servers with ID, PID, port, status, uptime, workspace, user, project |
 | `opencode-runtime serve` | Start a background server. Accepts `--workspace`, `--user-id` |
 | `opencode-runtime health <id>` | Health check a server by ID. Exits non-zero if unhealthy |
+| `opencode-runtime inspect <id>` | Show detailed info for a server: uptime, idle time, runtime version, log file |
 | `opencode-runtime stop <id>` | Stop a specific server by ID |
 | `opencode-runtime stop-all` | Stop all running servers |

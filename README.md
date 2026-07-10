@@ -58,14 +58,15 @@ opencode-runtime ps
 ```
 
 ```
-  ID                  PID    PORT    STATUS     UPTIME    WORKSPACE   USER    PROJECT
-  ──────────────────────────────────────────────────────────────────────────────────
-  39dce5beb4debfaa   12051   58409   ● alive    Up 5m     org_a       u_1     ~/Developer/myproject
-  81fa29acb3e9210f   12088   58411   ● alive    Up 3m     org_b       u_2     ~/Developer/myproject
+  ID                  PID    PORT    STATUS      UPTIME    WORKSPACE   USER    PROJECT
+  ───────────────────────────────────────────────────────────────────────────────────
+  39dce5beb4debfaa   12051   58409   ● running   5m        org_a       u_1     ~/Developer/myproject
+  81fa29acb3e9210f   12088   58411   ● running   3m        org_b       u_2     ~/Developer/myproject
 ```
 
 ```sh
 opencode-runtime health 39dce5beb4debfaa
+opencode-runtime inspect 39dce5beb4debfaa
 opencode-runtime stop-all
 ```
 
