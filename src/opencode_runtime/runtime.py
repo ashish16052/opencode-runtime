@@ -55,19 +55,10 @@ class OpenCodeRuntime:
     # ------------------------------------------------------------------
 
     async def __aenter__(self) -> OpenCodeRuntime:
-        await self.start()
         return self
 
     async def __aexit__(self, exc_type: t.Any, exc: t.Any, tb: t.Any) -> None:
-        await self.stop()
-
-    async def start(self) -> None:
-        """Start the default OpenCode instance eagerly so the runtime is ready to use."""
-        await self.session()
-
-    async def stop(self) -> None:
-        """Shut down all managed OpenCode instance processes."""
-        await self._server_manager.stop_all()
+        pass
 
     # ------------------------------------------------------------------
     # Session factory
