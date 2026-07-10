@@ -3,6 +3,7 @@ Tests for internal server helpers — no opencode binary required.
 Tests for ServerManager — require the real opencode binary.
 """
 
+import asyncio
 import os
 import signal
 from pathlib import Path
@@ -310,15 +311,18 @@ class TestServerManagerRegistry:
         from opencode_runtime.registry import RegistryEntry, now_iso
 
         key = _compute_runtime_key(None, None, tmp_path, None, {})
+        timestamp = now_iso()
         registry.write(
             RegistryEntry(
                 key=key,
+                state="ready",
                 pid=99999999,
                 port=54321,
                 password="stale",
                 project_dir=str(tmp_path),
                 server_dir=None,
-                started_at=now_iso(),
+                started_at=timestamp,
+                claimed_at=timestamp,
             )
         )
 
@@ -520,17 +524,144 @@ class TestServerManagerQuery:
 
         monkeypatch.setattr(registry, "REGISTRY_DIR", tmp_path / "reg")
         key = _compute_runtime_key(None, None, tmp_path, None, {})
+        timestamp = now_iso()
         registry.write(
             RegistryEntry(
                 key=key,
+                state="ready",
                 pid=99999999,
                 port=54321,
                 password="x",
                 project_dir=str(tmp_path),
                 server_dir=None,
-                started_at=now_iso(),
+                started_at=timestamp,
+                claimed_at=timestamp,
             )
         )
         was_alive = await ServerManager().stop(key)
         assert was_alive is False
         assert registry.read(key) is None  # still cleaned up
+
+
+class TestGetOrStartConcurrency:
+    """get_or_start's race fix: concurrent callers for the same key should
+    result in exactly one _start() call, with the rest attaching to it.
+    Uses a fake _start() so these don't need the real opencode binary."""
+
+    def _fake_start(self, key: str, tmp_path: Path, delay: float, call_counter: list[int]):
+        from opencode_runtime.registry import RegistryEntry, now_iso
+
+        async def fake_start(_self, *, port, password, **kwargs):
+            call_counter.append(1)
+            await asyncio.sleep(delay)
+            timestamp = now_iso()
+            registry.write(
+                RegistryEntry(
+                    key=key,
+                    state="ready",
+                    pid=os.getpid(),
+                    port=port,
+                    password=password,
+                    project_dir=str(tmp_path),
+                    server_dir=None,
+                    started_at=timestamp,
+                    claimed_at=timestamp,
+                )
+            )
+            return _ManagedServer(key=key, process=None, client=None, server_dir=None)  # type: ignore[arg-type]
+
+        return fake_start
+
+    async def test_concurrent_get_or_start_calls_start_once(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(registry, "REGISTRY_DIR", tmp_path / "reg")
+        key = _compute_runtime_key(None, None, tmp_path, None, {})
+        calls: list[int] = []
+        monkeypatch.setattr(ServerManager, "_start", self._fake_start(key, tmp_path, 0.2, calls))
+        manager = ServerManager()
+
+        def request():
+            return manager.get_or_start(
+                key=key,
+                project_dir=tmp_path,
+                server_dir=None,
+                materials=None,
+                config={},
+                env={},
+            )
+
+        results = await asyncio.gather(request(), request(), request())
+
+        assert len(calls) == 1
+        assert all(isinstance(r, _ManagedServer) for r in results)
+        assert all(r.key == key for r in results)
+
+    async def test_failed_start_deletes_claim_for_retry(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(registry, "REGISTRY_DIR", tmp_path / "reg")
+        key = _compute_runtime_key(None, None, tmp_path, None, {})
+        calls: list[int] = []
+        succeeding_start = self._fake_start(key, tmp_path, 0.0, calls)
+
+        async def failing_once(_self, **kwargs):
+            if len(calls) == 0:
+                calls.append(1)
+                raise RuntimeError("boom")
+            return await succeeding_start(_self, **kwargs)
+
+        monkeypatch.setattr(ServerManager, "_start", failing_once)
+        manager = ServerManager()
+
+        with pytest.raises(RuntimeError):
+            await manager.get_or_start(
+                key=key,
+                project_dir=tmp_path,
+                server_dir=None,
+                materials=None,
+                config={},
+                env={},
+            )
+
+        # The failed attempt's except-block deleted its claim row, so a
+        # retry can proceed instead of finding a stuck 'starting' row.
+        assert registry.read(key) is None
+
+        result = await manager.get_or_start(
+            key=key,
+            project_dir=tmp_path,
+            server_dir=None,
+            materials=None,
+            config={},
+            env={},
+        )
+        assert isinstance(result, _ManagedServer)
+
+    async def test_losing_caller_raises_when_starter_fails(self, tmp_path, monkeypatch):
+        """A caller waiting on someone else's claim should fail fast, not
+        hang for the full timeout, once that claim disappears."""
+        monkeypatch.setattr(registry, "REGISTRY_DIR", tmp_path / "reg")
+        key = _compute_runtime_key(None, None, tmp_path, None, {})
+
+        async def always_fails(_self, **kwargs):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(ServerManager, "_start", always_fails)
+        manager = ServerManager()
+
+        with pytest.raises(Exception):
+            await asyncio.gather(
+                manager.get_or_start(
+                    key=key,
+                    project_dir=tmp_path,
+                    server_dir=None,
+                    materials=None,
+                    config={},
+                    env={},
+                ),
+                manager.get_or_start(
+                    key=key,
+                    project_dir=tmp_path,
+                    server_dir=None,
+                    materials=None,
+                    config={},
+                    env={},
+                ),
+            )

@@ -38,12 +38,14 @@ def ns(**kwargs: object) -> argparse.Namespace:
 def make_entry(**kwargs: object) -> RegistryEntry:
     defaults: dict[str, object] = dict(
         key="abc123def456abcd",
+        state="ready",
         pid=os.getpid(),  # alive by default
         port=54321,
         password="secret",
         project_dir="/tmp/project",
         server_dir=None,
         started_at="2026-07-05T00:00:00+00:00",
+        claimed_at="2026-07-05T00:00:00+00:00",
         workspace=None,
         user_id=None,
     )
