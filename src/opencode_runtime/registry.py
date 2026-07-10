@@ -20,6 +20,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Generator
 
+from .schema import SCHEMA, SCHEMA_VERSION, migrate
+
 REGISTRY_DIR = Path(
     os.environ.get("OPENCODE_RUNTIME_REGISTRY_DIR")
     or (Path.home() / ".opencode-runtime" / "servers")
@@ -71,24 +73,6 @@ class RegistryEntry:
     runtime_version: str | None = None
 
 
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS servers (
-    key             TEXT PRIMARY KEY,
-    state           TEXT NOT NULL,
-    pid             INTEGER,
-    port            INTEGER NOT NULL,
-    password        TEXT NOT NULL,
-    project_dir     TEXT NOT NULL,
-    server_dir      TEXT,
-    started_at      TEXT NOT NULL,
-    claimed_at      TEXT NOT NULL,
-    workspace       TEXT,
-    user_id         TEXT,
-    last_used_at    TEXT,
-    runtime_version TEXT
-)
-"""
-
 _INSERT = """
 INSERT INTO servers (key, state, pid, port, password, project_dir, server_dir,
                      started_at, claimed_at, workspace, user_id, last_used_at,
@@ -115,9 +99,14 @@ def _connect() -> Generator[sqlite3.Connection, None, None]:
     conn = sqlite3.connect(db_path, timeout=5.0)
     try:
         conn.row_factory = sqlite3.Row
-        conn.execute(_SCHEMA)
+        conn.execute(SCHEMA)
         if is_new:
             db_path.chmod(0o600)  # entries hold server passwords
+            conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        else:
+            current_version = conn.execute("PRAGMA user_version").fetchone()[0]
+            if current_version != SCHEMA_VERSION:
+                migrate(conn, current_version)
         yield conn
         conn.commit()
     finally:
