@@ -19,6 +19,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+try:
+    from importlib.metadata import version
+except ImportError:
+    from importlib_metadata import version  # type: ignore[import-not-found,no-redef]
+
 import httpx
 
 from . import registry
@@ -45,6 +50,40 @@ class _ManagedServer:
     process: asyncio.subprocess.Process | None  # set during _start(); None from get_or_start()
     client: OpenCodeClient
     server_dir: Path | None  # None when runtime_dir is not set (no isolation)
+
+
+def _is_process_alive(pid: int | None) -> bool:
+    """Return True if pid is set and a process with it is running."""
+    return registry.is_alive(pid)
+
+
+async def _is_health_ok(client: OpenCodeClient, timeout: float = 3.0) -> bool:
+    """Return True if /global/health endpoint responds successfully."""
+    try:
+        await asyncio.wait_for(client.health(), timeout=timeout)
+        return True
+    except Exception:
+        return False
+
+
+def _compute_display_status(
+    state: str, process_alive: bool, health_ok: bool, lease_expired: bool = False
+) -> str:
+    """Derive user-facing display status from state, process liveness, and health.
+
+    Returns one of: starting, running, unhealthy, stale, failed.
+    """
+    if state == "starting":
+        return "failed" if lease_expired else "starting"
+    if state == "stopping":
+        return "stopping"
+    if state == "failed":
+        return "failed"
+    if not process_alive:
+        return "stale"
+    if not health_ok:
+        return "unhealthy"
+    return "running"
 
 
 def _find_free_port(host: str = "127.0.0.1") -> int:
@@ -169,19 +208,26 @@ class ServerManager:
     def find(self, key: str) -> RegistryEntry | None:
         """Return the registry entry for key, or None if not found or still starting."""
         entry = registry.read(key)
-        return entry if entry is not None and entry.state == "ready" else None
+        return entry if entry is not None and entry.state == "running" else None
 
     def is_alive(self, key: str) -> bool:
         """Return True if the server for key is running."""
         entry = self.find(key)
         return entry is not None and registry.is_alive(entry.pid)
 
+    def touch(self, key: str) -> None:
+        """Update last_used_at timestamp for a server. Call after session creation."""
+        entry = registry.read(key)
+        if entry is not None and entry.state == "running":
+            entry.last_used_at = registry.now_iso()
+            registry.write(entry)
+
     def list(self) -> list[tuple[RegistryEntry, bool]]:
         """Return all ready registry entries with their liveness status."""
         return [
             (entry, registry.is_alive(entry.pid))
             for entry in registry.list_all()
-            if entry.state == "ready"
+            if entry.state == "running"
         ]
 
     async def health(self, key: str) -> dict[str, Any]:
@@ -253,7 +299,7 @@ class ServerManager:
     ) -> _ManagedServer:
         """Return a client for the running server, starting one if needed."""
         entry = registry.read(key)
-        if entry is not None and entry.state == "ready":
+        if entry is not None and entry.state == "running":
             if registry.is_alive(entry.pid):
                 return self._attach(entry)
             # Stale — the process died after finishing startup.
@@ -324,7 +370,7 @@ class ServerManager:
                 raise OpenCodeServerError(
                     f"the caller starting server {key!r} failed before it became ready"
                 )
-            if entry.state == "ready" and registry.is_alive(entry.pid):
+            if entry.state == "running" and registry.is_alive(entry.pid):
                 return self._attach(entry)
             await asyncio.sleep(0.1)
 
@@ -402,7 +448,7 @@ class ServerManager:
         registry.write(
             RegistryEntry(
                 key=key,
-                state="ready",
+                state="running",
                 pid=process.pid,
                 port=port,
                 password=password,
@@ -410,6 +456,8 @@ class ServerManager:
                 server_dir=str(server_dir) if server_dir else None,
                 started_at=timestamp,
                 claimed_at=timestamp,
+                last_used_at=timestamp,
+                runtime_version=version("opencode-runtime"),
                 workspace=workspace,
                 user_id=user_id,
             )

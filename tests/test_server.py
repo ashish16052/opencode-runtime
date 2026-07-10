@@ -315,7 +315,7 @@ class TestServerManagerRegistry:
         registry.write(
             RegistryEntry(
                 key=key,
-                state="ready",
+                state="running",
                 pid=99999999,
                 port=54321,
                 password="stale",
@@ -528,7 +528,7 @@ class TestServerManagerQuery:
         registry.write(
             RegistryEntry(
                 key=key,
-                state="ready",
+                state="running",
                 pid=99999999,
                 port=54321,
                 password="x",
@@ -558,7 +558,7 @@ class TestGetOrStartConcurrency:
             registry.write(
                 RegistryEntry(
                     key=key,
-                    state="ready",
+                    state="running",
                     pid=os.getpid(),
                     port=port,
                     password=password,
