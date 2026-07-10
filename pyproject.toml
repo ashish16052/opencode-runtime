@@ -1,6 +1,6 @@
 [project]
 name = "opencode-runtime"
-version = "0.4.1"
+version = "0.5.0"
 description = "Embed OpenCode in your Python application."
 readme = "README.md"
 requires-python = ">=3.10"

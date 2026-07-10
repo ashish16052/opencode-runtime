@@ -1,6 +1,22 @@
 # Changelog
 
-## [Unreleased]
+## [0.5.0]
+
+### Added
+- SQLite-backed server registry at `~/.opencode-runtime/servers/registry.db` — persistent, atomic, supports concurrent claims
+- `ServerState` enum (STARTING, RUNNING, STOPPING, FAILED) for type-safe state tracking
+- Health probes: process liveness check + HTTP health endpoint verification; display status shows running/starting/unhealthy/stale/failed
+- `inspect` command: detailed server info (PID, port, uptime, idle time, runtime version, health)
+- Server metadata: track `runtime_version` and `last_used_at` timestamp
+
+### Changed
+- Registry moved from PID files to SQLite — no API changes, same registry operations
+- All state tracking uses `ServerState` enum instead of string literals (type safety)
+- Server startup now lazy — contexts don't auto-create default server, start on first `session()` call
+- `runtime.close()` now stops only servers that `OpenCodeRuntime` instance itself started; servers it merely attached to (already running, started by another process or the CLI) are left alone (safe for multi-process deployments)
+
+### Fixed
+- one `OpenCodeRuntime` exiting would terminate servers created by other processes or CLI — now scoped to servers it actually started
 
 ## [0.4.1] - 2026-07-09
 
