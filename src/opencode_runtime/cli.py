@@ -230,8 +230,10 @@ def cmd_ps(_args: argparse.Namespace) -> None:
 
 
 def cmd_stop(args: argparse.Namespace) -> None:
+    from . import registry
+
     manager = ServerManager()
-    entry = manager.find(args.key)
+    entry = registry.read(args.key)
     if entry is None:
         sys.exit(_red(f"✗ ID {args.key!r} not found in registry"))
 
@@ -241,7 +243,7 @@ def cmd_stop(args: argparse.Namespace) -> None:
 
     print(f"{_green('✓ Server stopped')}\n")
     _row("ID", entry.key)
-    _row("PID", _dim(str(entry.pid)))
+    _row("PID", _dim(str(entry.pid)) if entry.pid else _dim("(none)"))
 
 
 # ---------------------------------------------------------------------------
