@@ -24,8 +24,9 @@ class OpenCodeClient:
     Args:
         base_url:  Base URL of the running opencode server,
                    e.g. ``"http://127.0.0.1:4096"``.
-        password:  Value of ``OPENCODE_SERVER_PASSWORD``. Sent as
-                   ``Authorization: Bearer <password>`` when set.
+        password:  Value of ``OPENCODE_SERVER_PASSWORD``. Sent as HTTP Basic
+                   auth (``Authorization: Basic base64("opencode:<password>")``)
+                   when set.
         timeout:   Default request timeout in seconds.
     """
 
