@@ -18,9 +18,8 @@ async def runtime(tmp_path):
         project_dir=tmp_path,
         runtime_dir=tmp_path / "runtime",
     )
-    await r.start()
     yield r
-    await r.stop()
+    await r.close()
 
 
 class TestSessionFactory:

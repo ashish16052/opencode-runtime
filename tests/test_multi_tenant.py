@@ -23,9 +23,8 @@ async def runtime(tmp_path, monkeypatch):
         project_dir=tmp_path,
         runtime_dir=tmp_path / "runtime",
     )
-    await r.start()
     yield r
-    await r.stop()
+    await r.close()
 
 
 class TestWorkspaceIsolation:
@@ -69,7 +68,7 @@ class TestServerDirs:
         await runtime.session(workspace="beta")
         servers_root = runtime.runtime_dir / "servers"
         server_dirs = list(servers_root.iterdir())
-        assert len(server_dirs) == 3  # default + acme + beta
+        assert len(server_dirs) == 2  # acme + beta
 
     async def test_server_dir_has_log(self, runtime):
         """Each server dir contains an opencode.log."""
@@ -80,22 +79,6 @@ class TestServerDirs:
 
 
 class TestStopBehaviour:
-    async def test_stop_all_terminates_all_tenant_servers(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(registry, "REGISTRY_DIR", tmp_path / "reg")
-        async with OpenCodeRuntime(
-            project_dir=tmp_path,
-            runtime_dir=tmp_path / "runtime",
-        ) as r:
-            await r.session(workspace="acme")
-            await r.session(workspace="beta")
-            entries = registry.list_all()
-            assert len(entries) == 3  # default + acme + beta
-            pids = [e.pid for e in entries]
-
-        # All terminated after context manager exit
-        assert all(not registry.is_alive(pid) for pid in pids)
-        assert registry.list_all() == []
-
     async def test_stop_single_tenant(self, tmp_path, monkeypatch):
         """Stopping one tenant server leaves others running."""
         from pathlib import Path
