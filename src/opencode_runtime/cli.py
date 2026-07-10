@@ -17,15 +17,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .client import OpenCodeClient
-from .registry import ServerState
-from .server import (
-    ServerManager,
-    _compute_display_status,
-    _compute_runtime_key,
-    _is_health_ok,
-    _is_process_alive,
-)
+from .server import DisplayStatus, ServerManager, _compute_runtime_key
 
 # ---------------------------------------------------------------------------
 # ANSI
@@ -82,6 +74,29 @@ def _uptime(started_at: str, alive: bool) -> str:
 
 def _row(label: str, value: str) -> None:
     print(f"  {_cyan(f'{label:<9}')}  {value}")
+
+
+_STATUS_ICONS: dict[DisplayStatus, str] = {
+    DisplayStatus.RUNNING: "●",
+    DisplayStatus.STARTING: "◐",
+    DisplayStatus.UNHEALTHY: "▲",
+    DisplayStatus.STALE: "○",
+    DisplayStatus.FAILED: "✗",
+}
+_STATUS_COLORS = {
+    DisplayStatus.RUNNING: _green,
+    DisplayStatus.STARTING: _yellow,
+    DisplayStatus.UNHEALTHY: _red,
+    DisplayStatus.STALE: _dim,
+    DisplayStatus.FAILED: _red,
+}
+
+
+def _status_display(status: DisplayStatus) -> str:
+    """Render a ServerStatus.display value as a coloured icon + label."""
+    icon = _STATUS_ICONS.get(status, "?")
+    color = _STATUS_COLORS.get(status, _dim)
+    return color(f"{icon} {status.value}")
 
 
 # ---------------------------------------------------------------------------
@@ -160,9 +175,9 @@ def cmd_serve(args: argparse.Namespace) -> None:
 
 
 def cmd_ps(_args: argparse.Namespace) -> None:
-    entries = ServerManager().list()
-    show_workspace = any(e.workspace for e, _ in entries)
-    show_user = any(e.user_id for e, _ in entries)
+    statuses = asyncio.run(ServerManager().list_statuses())
+    show_workspace = any(st.entry.workspace for st in statuses)
+    show_user = any(st.entry.user_id for st in statuses)
 
     cols = ["  {:<18}", "{:>6}", "{:>6}", "{:<11}", "{:>8}"]
     headers = ["ID", "PID", "PORT", "STATUS", "UPTIME"]
@@ -179,38 +194,10 @@ def cmd_ps(_args: argparse.Namespace) -> None:
     print(_cyan(fmt.format(*headers)))
     print(_dim("  " + "─" * (70 + 14 * show_workspace + 14 * show_user)))
 
-    for e, alive in entries:
-        # Compute display status based on liveness and health
-        process_alive = alive
-        health_ok = False
-        if process_alive:
-            client = OpenCodeClient(
-                base_url=f"http://127.0.0.1:{e.port}",
-                password=e.password,
-            )
-            health_ok = asyncio.run(_is_health_ok(client, timeout=1.0))
-
-        status = _compute_display_status(e.state, process_alive, health_ok)
-
-        # Status icon and color
-        status_icons = {
-            "running": "●",
-            "starting": "◐",
-            "unhealthy": "▲",
-            "stale": "○",
-            "failed": "✗",
-        }
-        status_colors = {
-            "running": _green,
-            "starting": _yellow,
-            "unhealthy": _red,
-            "stale": _dim,
-            "failed": _red,
-        }
-        status_icon = status_icons.get(status, "?")
-        status_color = status_colors.get(status, _dim)
-        status_display = f"{status_icon} {status}"
-        status_coloured = status_color(status_display)
+    for st in statuses:
+        e = st.entry
+        status_plain = f"{_STATUS_ICONS.get(st.display, '?')} {st.display.value}"
+        status_coloured = _status_display(st.display)
 
         # Compute uptime
         try:
@@ -225,14 +212,14 @@ def cmd_ps(_args: argparse.Namespace) -> None:
         except Exception:
             uptime_str = "?"
 
-        vals = [e.key, str(e.pid), str(e.port), status_display, uptime_str]
+        vals = [e.key, str(e.pid), str(e.port), status_plain, uptime_str]
         if show_workspace:
             vals.append(e.workspace or "-")
         if show_user:
             vals.append(e.user_id or "-")
         vals.append(_home(e.project_dir))
         row = fmt.format(*vals)
-        row = row.replace(status_display, status_coloured, 1)
+        row = row.replace(status_plain, status_coloured, 1)
         print(_dim(row).replace(_dim(status_coloured), status_coloured, 1))
 
 
@@ -281,27 +268,13 @@ def cmd_stop_all(_args: argparse.Namespace) -> None:
 
 
 def cmd_health(args: argparse.Namespace) -> None:
-    from . import registry
-
     manager = ServerManager()
-    entry = registry.read(args.key)
-    if entry is None:
+    st = asyncio.run(manager.status(args.key))
+    if st is None:
         sys.exit(_red(f"✗ ID {args.key!r} not found in registry"))
+    entry = st.entry
 
-    # Determine status
-    process_alive = _is_process_alive(entry.pid) if entry.state == ServerState.RUNNING else False
-    health_ok = False
-    if process_alive:
-        client = OpenCodeClient(
-            base_url=f"http://127.0.0.1:{entry.port}",
-            password=entry.password,
-        )
-        health_ok = asyncio.run(_is_health_ok(client))
-
-    status = _compute_display_status(entry.state, process_alive, health_ok)
-
-    # Generate reason message
-    if status == "running":
+    if st.display == DisplayStatus.RUNNING:
         try:
             result = asyncio.run(manager.health(args.key))
             version = result.get("version")
@@ -312,25 +285,25 @@ def cmd_health(args: argparse.Namespace) -> None:
             )
         except Exception as exc:
             sys.exit(_red(f"✗ unhealthy: /global/health failed: {exc}"))
-    elif status == "starting":
+    elif st.display == DisplayStatus.STARTING:
         try:
             claimed = datetime.fromisoformat(entry.claimed_at)
             age_secs = int((datetime.now(timezone.utc) - claimed).total_seconds())
             sys.exit(_yellow(f"◐ starting: claimed {age_secs}s ago, health check pending"))
         except Exception:
             sys.exit(_yellow("◐ starting: awaiting health check"))
-    elif status == "unhealthy":
+    elif st.display == DisplayStatus.UNHEALTHY:
         sys.exit(
             _red(
                 f"✗ unhealthy: process running (pid {entry.pid}) but /global/health endpoint failed"
             )
         )
-    elif status == "stale":
+    elif st.display == DisplayStatus.STALE:
         sys.exit(_red(f"✗ stale: registry entry exists but pid {entry.pid} is not running"))
-    elif status == "failed":
+    elif st.display == DisplayStatus.FAILED:
         sys.exit(_red("✗ failed: startup failed or lease expired"))
     else:
-        sys.exit(_red(f"✗ unknown: {status}"))
+        sys.exit(_red(f"✗ unknown: {st.display}"))
 
 
 # ---------------------------------------------------------------------------
@@ -339,28 +312,11 @@ def cmd_health(args: argparse.Namespace) -> None:
 
 
 def cmd_inspect(args: argparse.Namespace) -> None:
-    from .client import OpenCodeClient
-
     manager = ServerManager()
-    entry = manager.find(args.key)
-    if entry is None:
-        # Check if it's in registry but not ready (starting, stale, etc.)
-        from . import registry
-
-        entry = registry.read(args.key)
-        if entry is None:
-            sys.exit(_red(f"✗ ID {args.key!r} not found in registry"))
-
-    process_alive = _is_process_alive(entry.pid) if entry.state == ServerState.RUNNING else False
-    health_ok = False
-    if process_alive:
-        client = OpenCodeClient(
-            base_url=f"http://127.0.0.1:{entry.port}",
-            password=entry.password,
-        )
-        health_ok = asyncio.run(_is_health_ok(client))
-
-    status = _compute_display_status(entry.state, process_alive, health_ok)
+    st = asyncio.run(manager.status(args.key))
+    if st is None:
+        sys.exit(_red(f"✗ ID {args.key!r} not found in registry"))
+    entry = st.entry
 
     # Compute uptime
     try:
@@ -391,26 +347,9 @@ def cmd_inspect(args: argparse.Namespace) -> None:
     else:
         idle = "-"
 
-    # Display status with color
-    status_icon = {
-        "running": "●",
-        "starting": "◐",
-        "unhealthy": "▲",
-        "stale": "○",
-        "failed": "✗",
-    }.get(status, "?")
-    status_color = {
-        "running": _green,
-        "starting": _yellow,
-        "unhealthy": _red,
-        "stale": _dim,
-        "failed": _red,
-    }.get(status, _dim)
-    status_display = f"{status_color(status_icon + ' ' + status)}"
-
     print()
     _row("ID", entry.key)
-    _row("Status", status_display)
+    _row("Status", _status_display(st.display))
     _row("Project", _home(entry.project_dir))
     if entry.workspace:
         _row("Workspace", entry.workspace)
