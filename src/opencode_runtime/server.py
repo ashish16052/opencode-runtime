@@ -16,6 +16,7 @@ import shutil
 import signal
 import socket
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -52,6 +53,27 @@ class _ManagedServer:
     server_dir: Path | None  # None when runtime_dir is not set (no isolation)
 
 
+class DisplayStatus(str, Enum):
+    """User-facing status derived from registry state, process liveness, and health."""
+
+    STARTING = "starting"
+    RUNNING = "running"
+    UNHEALTHY = "unhealthy"
+    STALE = "stale"
+    FAILED = "failed"
+    STOPPING = "stopping"
+
+
+@dataclass
+class ServerStatus:
+    """Computed liveness/health status for a registry entry."""
+
+    entry: RegistryEntry
+    process_alive: bool
+    health_ok: bool
+    display: DisplayStatus
+
+
 def _is_process_alive(pid: int | None) -> bool:
     """Return True if pid is set and a process with it is running."""
     return registry.is_alive(pid)
@@ -68,22 +90,19 @@ async def _is_health_ok(client: OpenCodeClient, timeout: float = 3.0) -> bool:
 
 def _compute_display_status(
     state: ServerState, process_alive: bool, health_ok: bool, lease_expired: bool = False
-) -> str:
-    """Derive user-facing display status from state, process liveness, and health.
-
-    Returns one of: starting, running, unhealthy, stale, failed.
-    """
+) -> DisplayStatus:
+    """Derive user-facing display status from state, process liveness, and health."""
     if state == ServerState.STARTING:
-        return "failed" if lease_expired else "starting"
+        return DisplayStatus.FAILED if lease_expired else DisplayStatus.STARTING
     if state == ServerState.STOPPING:
-        return "stopping"
+        return DisplayStatus.STOPPING
     if state == ServerState.FAILED:
-        return "failed"
+        return DisplayStatus.FAILED
     if not process_alive:
-        return "stale"
+        return DisplayStatus.STALE
     if not health_ok:
-        return "unhealthy"
-    return "running"
+        return DisplayStatus.UNHEALTHY
+    return DisplayStatus.RUNNING
 
 
 def _find_free_port(host: str = "127.0.0.1") -> int:
@@ -229,6 +248,45 @@ class ServerManager:
         if entry is not None and entry.state == ServerState.RUNNING:
             entry.last_used_at = registry.now_iso()
             registry.write(entry)
+
+    async def _status_for_entry(
+        self, entry: RegistryEntry, *, health_timeout: float = 3.0
+    ) -> ServerStatus:
+        """Derive a ServerStatus for an already-fetched registry entry."""
+        process_alive = (
+            _is_process_alive(entry.pid) if entry.state == ServerState.RUNNING else False
+        )
+        health_ok = False
+        if process_alive:
+            client = OpenCodeClient(
+                base_url=f"http://127.0.0.1:{entry.port}",
+                password=entry.password,
+            )
+            health_ok = await _is_health_ok(client, timeout=health_timeout)
+        display = _compute_display_status(entry.state, process_alive, health_ok)
+        return ServerStatus(
+            entry=entry, process_alive=process_alive, health_ok=health_ok, display=display
+        )
+
+    async def status(self, key: str, *, health_timeout: float = 3.0) -> ServerStatus | None:
+        """Return the computed status for key, or None if not in the registry."""
+        entry = registry.read(key)
+        if entry is None:
+            return None
+        return await self._status_for_entry(entry, health_timeout=health_timeout)
+
+    # NOTE: list() and list_statuses() must stay defined in this order — once
+    # `list` is bound as a class attribute (the method below), any later
+    # annotation in this class body that writes the bare name `list[...]`
+    # resolves to that method, not the builtin (see the Materials alias note
+    # up top for the same issue). list_statuses()'s `-> list[ServerStatus]`
+    # return annotation is defined above list() to avoid it.
+    async def list_statuses(self, *, health_timeout: float = 1.0) -> list[ServerStatus]:
+        """Return computed status for every ready registry entry."""
+        return [
+            await self._status_for_entry(entry, health_timeout=health_timeout)
+            for entry, _ in self.list()
+        ]
 
     def list(self) -> list[tuple[RegistryEntry, bool]]:
         """Return all ready registry entries with their liveness status."""
