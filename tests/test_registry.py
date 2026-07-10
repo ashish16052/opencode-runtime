@@ -41,7 +41,9 @@ def make_claim(**kwargs: object) -> RegistryEntry:
     claimed_at defaults to now (not make_entry()'s fixed placeholder date),
     since claim_starting()'s lease check compares it against the real clock.
     """
-    defaults: dict[str, object] = dict(pid=None, state=ServerState.STARTING, claimed_at=registry.now_iso())
+    defaults: dict[str, object] = dict(
+        pid=None, state=ServerState.STARTING, claimed_at=registry.now_iso()
+    )
     defaults.update(kwargs)
     return make_entry(**defaults)
 

@@ -58,7 +58,18 @@ class OpenCodeRuntime:
         return self
 
     async def __aexit__(self, exc_type: t.Any, exc: t.Any, tb: t.Any) -> None:
-        pass
+        await self.close()
+
+    async def close(self) -> None:
+        """Stop every server this runtime instance itself started.
+
+        Servers this runtime merely attached to — already running, started
+        by another process or the CLI — are left alone; they're shared
+        state and exiting this runtime shouldn't terminate them out from
+        under whoever else is using them. To stop those explicitly, use the
+        CLI (``opencode-runtime stop`` / ``stop-all``).
+        """
+        await self._server_manager.stop_owned()
 
     # ------------------------------------------------------------------
     # Session factory

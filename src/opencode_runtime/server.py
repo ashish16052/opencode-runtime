@@ -200,10 +200,18 @@ class ServerManager:
     and config gets its own isolated OpenCode instance. Instances are started
     on demand and reused when the same key is requested again.
 
-    The registry is the single source of truth. There is no in-memory cache —
-    every call consults the registry so that external actors (CLI stop-all,
-    another process) are always reflected immediately.
+    The registry is the single source of truth for server state — there is
+    no in-memory cache of it, so every call consults the registry and
+    external actors (CLI stop-all, another process) are always reflected
+    immediately. The one piece of instance state this class keeps is
+    _owned — which keys *this instance* actually spawned via get_or_start(),
+    as opposed to attaching to a server already running elsewhere — so that
+    callers like OpenCodeRuntime.close() can stop what they started without
+    touching servers owned by someone else.
     """
+
+    def __init__(self) -> None:
+        self._owned: set[str] = set()
 
     def find(self, key: str) -> RegistryEntry | None:
         """Return the registry entry for key, or None if not found or still starting."""
@@ -285,6 +293,16 @@ class ServerManager:
         for entry in registry.list_all():
             await self.stop(entry.key)
 
+    async def stop_owned(self) -> None:
+        """Stop every server this instance itself spawned via get_or_start().
+
+        Servers this instance merely attached to — already running, started
+        by another process or the CLI — are left alone.
+        """
+        for key in list(self._owned):
+            await self.stop(key)
+        self._owned.clear()
+
     async def get_or_start(
         self,
         *,
@@ -333,7 +351,7 @@ class ServerManager:
             return await self._wait_for_ready(key)
 
         try:
-            return await self._start(
+            server = await self._start(
                 key=key,
                 project_dir=project_dir,
                 server_dir=server_dir,
@@ -348,6 +366,8 @@ class ServerManager:
         except Exception:
             registry.delete(key)
             raise
+        self._owned.add(key)
+        return server
 
     def _attach(self, entry: RegistryEntry) -> _ManagedServer:
         """Build a _ManagedServer client for an already-running registry entry."""
