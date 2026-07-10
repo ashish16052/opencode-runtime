@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 import opencode_runtime.registry as registry
+from opencode_runtime.registry import ServerState
 from opencode_runtime.server import (
     ServerManager,
     _ManagedServer,
@@ -315,7 +316,7 @@ class TestServerManagerRegistry:
         registry.write(
             RegistryEntry(
                 key=key,
-                state="running",
+                state=ServerState.RUNNING,
                 pid=99999999,
                 port=54321,
                 password="stale",
@@ -528,7 +529,7 @@ class TestServerManagerQuery:
         registry.write(
             RegistryEntry(
                 key=key,
-                state="running",
+                state=ServerState.RUNNING,
                 pid=99999999,
                 port=54321,
                 password="x",
@@ -558,7 +559,7 @@ class TestGetOrStartConcurrency:
             registry.write(
                 RegistryEntry(
                     key=key,
-                    state="running",
+                    state=ServerState.RUNNING,
                     pid=os.getpid(),
                     port=port,
                     password=password,

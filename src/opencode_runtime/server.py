@@ -34,7 +34,7 @@ from .exceptions import (
     OpenCodeServerError,
     OpenCodeTimeoutError,
 )
-from .registry import RegistryEntry
+from .registry import RegistryEntry, ServerState
 
 # One or more paths to overlay into the server dir before startup.
 # Module-level alias: inside ServerManager's class body, `list[...]` in an
@@ -67,17 +67,17 @@ async def _is_health_ok(client: OpenCodeClient, timeout: float = 3.0) -> bool:
 
 
 def _compute_display_status(
-    state: str, process_alive: bool, health_ok: bool, lease_expired: bool = False
+    state: ServerState, process_alive: bool, health_ok: bool, lease_expired: bool = False
 ) -> str:
     """Derive user-facing display status from state, process liveness, and health.
 
     Returns one of: starting, running, unhealthy, stale, failed.
     """
-    if state == "starting":
+    if state == ServerState.STARTING:
         return "failed" if lease_expired else "starting"
-    if state == "stopping":
+    if state == ServerState.STOPPING:
         return "stopping"
-    if state == "failed":
+    if state == ServerState.FAILED:
         return "failed"
     if not process_alive:
         return "stale"
@@ -208,7 +208,7 @@ class ServerManager:
     def find(self, key: str) -> RegistryEntry | None:
         """Return the registry entry for key, or None if not found or still starting."""
         entry = registry.read(key)
-        return entry if entry is not None and entry.state == "running" else None
+        return entry if entry is not None and entry.state == ServerState.RUNNING else None
 
     def is_alive(self, key: str) -> bool:
         """Return True if the server for key is running."""
@@ -218,7 +218,7 @@ class ServerManager:
     def touch(self, key: str) -> None:
         """Update last_used_at timestamp for a server. Call after session creation."""
         entry = registry.read(key)
-        if entry is not None and entry.state == "running":
+        if entry is not None and entry.state == ServerState.RUNNING:
             entry.last_used_at = registry.now_iso()
             registry.write(entry)
 
@@ -227,7 +227,7 @@ class ServerManager:
         return [
             (entry, registry.is_alive(entry.pid))
             for entry in registry.list_all()
-            if entry.state == "running"
+            if entry.state == ServerState.RUNNING
         ]
 
     async def health(self, key: str) -> dict[str, Any]:
@@ -299,7 +299,7 @@ class ServerManager:
     ) -> _ManagedServer:
         """Return a client for the running server, starting one if needed."""
         entry = registry.read(key)
-        if entry is not None and entry.state == "running":
+        if entry is not None and entry.state == ServerState.RUNNING:
             if registry.is_alive(entry.pid):
                 return self._attach(entry)
             # Stale — the process died after finishing startup.
@@ -315,7 +315,7 @@ class ServerManager:
         claimed = registry.claim_starting(
             RegistryEntry(
                 key=key,
-                state="starting",
+                state=ServerState.STARTING,
                 pid=None,
                 port=port,
                 password=password,
@@ -370,7 +370,7 @@ class ServerManager:
                 raise OpenCodeServerError(
                     f"the caller starting server {key!r} failed before it became ready"
                 )
-            if entry.state == "running" and registry.is_alive(entry.pid):
+            if entry.state == ServerState.RUNNING and registry.is_alive(entry.pid):
                 return self._attach(entry)
             await asyncio.sleep(0.1)
 
@@ -448,7 +448,7 @@ class ServerManager:
         registry.write(
             RegistryEntry(
                 key=key,
-                state="running",
+                state=ServerState.RUNNING,
                 pid=process.pid,
                 port=port,
                 password=password,

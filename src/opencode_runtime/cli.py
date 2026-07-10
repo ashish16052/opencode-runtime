@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .client import OpenCodeClient
+from .registry import ServerState
 from .server import (
     ServerManager,
     _compute_display_status,
@@ -288,7 +289,7 @@ def cmd_health(args: argparse.Namespace) -> None:
         sys.exit(_red(f"✗ ID {args.key!r} not found in registry"))
 
     # Determine status
-    process_alive = _is_process_alive(entry.pid) if entry.state == "running" else False
+    process_alive = _is_process_alive(entry.pid) if entry.state == ServerState.RUNNING else False
     health_ok = False
     if process_alive:
         client = OpenCodeClient(
@@ -350,7 +351,7 @@ def cmd_inspect(args: argparse.Namespace) -> None:
         if entry is None:
             sys.exit(_red(f"✗ ID {args.key!r} not found in registry"))
 
-    process_alive = _is_process_alive(entry.pid) if entry.state == "running" else False
+    process_alive = _is_process_alive(entry.pid) if entry.state == ServerState.RUNNING else False
     health_ok = False
     if process_alive:
         client = OpenCodeClient(
