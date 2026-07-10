@@ -117,6 +117,17 @@ def test_stop_dead_process_warns_and_deletes(capsys):
     assert registry.read("abc123def456abcd") is None
 
 
+def test_stop_starting_entry_is_removed(capsys):
+    """A STARTING entry (e.g. an orphaned claim) must be stoppable by key,
+    not just RUNNING ones — cmd_stop used to look it up via find(), which
+    filters to RUNNING and reported STARTING entries as "not found"."""
+    registry.write(make_entry(state=ServerState.STARTING, pid=None))
+    cmd_stop(ns(key="abc123def456abcd"))
+    out = capsys.readouterr().out
+    assert "Server stopped" in out
+    assert registry.read("abc123def456abcd") is None
+
+
 def _is_truly_dead(pid: int) -> bool:
     """Return True if pid is dead or a zombie (functionally dead).
 
