@@ -16,6 +16,7 @@ import sqlite3
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
+from enum import Enum
 from pathlib import Path
 from typing import Generator
 
@@ -33,10 +34,30 @@ REGISTRY_DIR = Path(
 _START_LEASE_SECONDS = 90
 
 
+class ServerState(str, Enum):
+    """Server lifecycle state.
+
+    STARTING: claimed startup slot, awaiting health check.
+    RUNNING: process alive, health check passing.
+    STOPPING: shutdown initiated (reserved for future use).
+    FAILED: startup failed or lease expired (reserved for future use).
+    """
+
+    STARTING = "starting"
+    RUNNING = "running"
+    STOPPING = "stopping"
+    FAILED = "failed"
+
+
 @dataclass
 class RegistryEntry:
+    """A server entry in the registry.
+
+    state: ServerState enum value. Display status is derived from state + observed health.
+    """
+
     key: str
-    state: str  # "starting" | "ready"
+    state: str  # ServerState: "starting" | "running" | "stopping" | "failed"
     pid: int | None
     port: int
     password: str

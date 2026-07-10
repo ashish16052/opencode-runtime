@@ -22,7 +22,7 @@ def isolated_registry(tmp_path, monkeypatch):
 def make_entry(**kwargs: object) -> RegistryEntry:
     defaults: dict[str, object] = dict(
         key="abc123def456abcd",
-        state="ready",
+        state="running",
         pid=99999,
         port=54321,
         password="secret",
@@ -210,13 +210,13 @@ async def test_claim_starting_does_not_reclaim_before_lease_expires():
 
 
 async def test_claim_starting_does_not_reclaim_ready_row():
-    """A live 'ready' row isn't touched by claim_starting's lease logic."""
-    entry = make_entry()  # state="ready"
+    """A live 'running' row isn't touched by claim_starting's lease logic."""
+    entry = make_entry()  # state="running"
     registry.write(entry)
     assert registry.claim_starting(make_claim(port=55555)) is False
     result = registry.read(entry.key)
     assert result is not None
-    assert result.state == "ready"
+    assert result.state == "running"
     assert result.port == entry.port
 
 
