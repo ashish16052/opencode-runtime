@@ -126,6 +126,8 @@ class OpenCodeRuntime:
             user_id=user_id,
         )
 
+        self._server_manager.touch(key)
+
         return OpenCodeSession(
             client=server.client,
             workspace=workspace,
