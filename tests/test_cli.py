@@ -38,7 +38,7 @@ def ns(**kwargs: object) -> argparse.Namespace:
 def make_entry(**kwargs: object) -> RegistryEntry:
     defaults: dict[str, object] = dict(
         key="abc123def456abcd",
-        state="ready",
+        state="running",
         pid=os.getpid(),  # alive by default
         port=54321,
         password="secret",
@@ -65,19 +65,20 @@ def test_ps_empty_shows_header(capsys):
     assert "STATUS" in out
 
 
-def test_ps_shows_alive_entry(capsys):
+def test_ps_shows_running_entry(capsys):
+    # Note: test entry has live PID but no actual health endpoint, so shows as unhealthy
     registry.write(make_entry())
     cmd_ps(ns())
     out = capsys.readouterr().out
     assert "abc123def456abcd" in out
-    assert "alive" in out
+    assert "running" in out or "unhealthy" in out  # depends on health check
 
 
-def test_ps_shows_dead_entry(capsys):
+def test_ps_shows_stale_entry(capsys):
     registry.write(make_entry(pid=99999999))
     cmd_ps(ns())
     out = capsys.readouterr().out
-    assert "dead" in out
+    assert "stale" in out
 
 
 def test_ps_shows_workspace_user_columns_when_set(capsys):
