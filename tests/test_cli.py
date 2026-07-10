@@ -16,7 +16,7 @@ import pytest
 
 import opencode_runtime.registry as registry
 from opencode_runtime.cli import cmd_health, cmd_ps, cmd_serve, cmd_stop, cmd_stop_all
-from opencode_runtime.registry import RegistryEntry
+from opencode_runtime.registry import RegistryEntry, ServerState
 
 
 # ---------------------------------------------------------------------------
@@ -38,7 +38,7 @@ def ns(**kwargs: object) -> argparse.Namespace:
 def make_entry(**kwargs: object) -> RegistryEntry:
     defaults: dict[str, object] = dict(
         key="abc123def456abcd",
-        state="running",
+        state=ServerState.RUNNING,
         pid=os.getpid(),  # alive by default
         port=54321,
         password="secret",

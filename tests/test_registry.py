@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 import opencode_runtime.registry as registry
-from opencode_runtime.registry import RegistryEntry
+from opencode_runtime.registry import RegistryEntry, ServerState
 
 pytestmark = pytest.mark.asyncio
 
@@ -22,7 +22,7 @@ def isolated_registry(tmp_path, monkeypatch):
 def make_entry(**kwargs: object) -> RegistryEntry:
     defaults: dict[str, object] = dict(
         key="abc123def456abcd",
-        state="running",
+        state=ServerState.RUNNING,
         pid=99999,
         port=54321,
         password="secret",
@@ -41,7 +41,7 @@ def make_claim(**kwargs: object) -> RegistryEntry:
     claimed_at defaults to now (not make_entry()'s fixed placeholder date),
     since claim_starting()'s lease check compares it against the real clock.
     """
-    defaults: dict[str, object] = dict(pid=None, state="starting", claimed_at=registry.now_iso())
+    defaults: dict[str, object] = dict(pid=None, state=ServerState.STARTING, claimed_at=registry.now_iso())
     defaults.update(kwargs)
     return make_entry(**defaults)
 
@@ -83,12 +83,12 @@ async def test_write_twice_replaces_entry():
 
 async def test_write_with_null_pid():
     """A 'starting' row has no pid yet."""
-    entry = make_entry(state="starting", pid=None)
+    entry = make_entry(state=ServerState.STARTING, pid=None)
     registry.write(entry)
     result = registry.read(entry.key)
     assert result is not None
     assert result.pid is None
-    assert result.state == "starting"
+    assert result.state == ServerState.STARTING
 
 
 # ---------------------------------------------------------------------------
@@ -163,7 +163,7 @@ async def test_claim_starting_succeeds_for_new_key():
     assert registry.claim_starting(entry) is True
     result = registry.read(entry.key)
     assert result is not None
-    assert result.state == "starting"
+    assert result.state == ServerState.STARTING
     assert result.pid is None
 
 
@@ -211,12 +211,12 @@ async def test_claim_starting_does_not_reclaim_before_lease_expires():
 
 async def test_claim_starting_does_not_reclaim_ready_row():
     """A live 'running' row isn't touched by claim_starting's lease logic."""
-    entry = make_entry()  # state="running"
+    entry = make_entry()  # state=ServerState.RUNNING
     registry.write(entry)
     assert registry.claim_starting(make_claim(port=55555)) is False
     result = registry.read(entry.key)
     assert result is not None
-    assert result.state == "running"
+    assert result.state == ServerState.RUNNING
     assert result.port == entry.port
 
 

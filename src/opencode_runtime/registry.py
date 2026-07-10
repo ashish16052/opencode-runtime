@@ -57,7 +57,7 @@ class RegistryEntry:
     """
 
     key: str
-    state: str  # ServerState: "starting" | "running" | "stopping" | "failed"
+    state: ServerState
     pid: int | None
     port: int
     password: str
@@ -169,8 +169,8 @@ def claim_starting(entry: RegistryEntry) -> bool:
     try:
         with _connect() as conn:
             conn.execute(
-                "DELETE FROM servers WHERE key = ? AND state = 'starting' AND claimed_at < ?",
-                (entry.key, cutoff),
+                "DELETE FROM servers WHERE key = ? AND state = ? AND claimed_at < ?",
+                (entry.key, ServerState.STARTING.value, cutoff),
             )
             conn.execute(_INSERT, asdict(entry))
         return True
