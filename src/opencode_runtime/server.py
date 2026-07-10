@@ -13,15 +13,28 @@ import json
 import os
 import secrets
 import shutil
+import signal
 import socket
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-if TYPE_CHECKING:
-    from .client import OpenCodeClient
+import httpx
 
+from . import registry
+from .client import OpenCodeClient
+from .exceptions import (
+    OpenCodeNotFoundError,
+    OpenCodeRuntimeError,
+    OpenCodeServerError,
+    OpenCodeTimeoutError,
+)
 from .registry import RegistryEntry
+
+# One or more paths to overlay into the server dir before startup.
+# Module-level alias: inside ServerManager's class body, `list[...]` in an
+# annotation would resolve to the ServerManager.list method, not the builtin.
+Materials = str | Path | list[str | Path] | None
 
 
 @dataclass
@@ -47,8 +60,6 @@ async def _wait_healthy(
     process: asyncio.subprocess.Process | None = None,
 ) -> None:
     """Poll GET /global/health until the server responds or timeout expires."""
-    from .exceptions import OpenCodeTimeoutError
-
     deadline = asyncio.get_event_loop().time() + timeout
     last_exc: Exception | None = None
 
@@ -70,11 +81,9 @@ async def _wait_healthy(
 def _prepare_dir(
     server_dir: Path,
     config: dict[str, Any],
-    materials: str | Path | list[str | Path] | None,
+    materials: Materials,
 ) -> None:
     """Write opencode.json and overlay materials into server_dir."""
-    from .exceptions import OpenCodeRuntimeError
-
     if config:
         (server_dir / "opencode.json").write_text(
             json.dumps(config, indent=2),
@@ -119,7 +128,7 @@ def _compute_runtime_key(
     workspace: str | None,
     user_id: str | None,
     project_dir: Path,
-    materials: str | Path | list[str | Path] | None,
+    materials: Materials,
     config: dict[str, Any],
 ) -> str:
     """Compute a stable 16-char key for a unique server configuration.
@@ -158,25 +167,22 @@ class ServerManager:
     """
 
     def find(self, key: str) -> RegistryEntry | None:
-        """Return the registry entry for key, or None if not found."""
-        from .registry import read as registry_read
-
-        return registry_read(key)
+        """Return the registry entry for key, or None if not found or still starting."""
+        entry = registry.read(key)
+        return entry if entry is not None and entry.state == "ready" else None
 
     def is_alive(self, key: str) -> bool:
         """Return True if the server for key is running."""
-        from .registry import is_alive
-        from .registry import read as registry_read
-
-        entry = registry_read(key)
-        return entry is not None and is_alive(entry.pid)
+        entry = self.find(key)
+        return entry is not None and registry.is_alive(entry.pid)
 
     def list(self) -> list[tuple[RegistryEntry, bool]]:
-        """Return all registry entries with their liveness status."""
-        from .registry import is_alive
-        from .registry import list_all
-
-        return [(entry, is_alive(entry.pid)) for entry in list_all()]
+        """Return all ready registry entries with their liveness status."""
+        return [
+            (entry, registry.is_alive(entry.pid))
+            for entry in registry.list_all()
+            if entry.state == "ready"
+        ]
 
     async def health(self, key: str) -> dict[str, Any]:
         """Return health info for the server at key.
@@ -184,13 +190,7 @@ class ServerManager:
         Raises ``OpenCodeServerError`` if key is not in the registry or the
         server is unreachable.
         """
-        import httpx
-
-        from .client import OpenCodeClient
-        from .exceptions import OpenCodeServerError
-        from .registry import read as registry_read
-
-        entry = registry_read(key)
+        entry = self.find(key)
         if entry is None:
             raise OpenCodeServerError(f"server {key!r} not found in registry")
 
@@ -209,20 +209,14 @@ class ServerManager:
         Returns True if the process was alive and killed, False if it was
         already dead or not found in the registry.
         """
-        from .registry import delete as registry_delete
-        from .registry import is_alive
-        from .registry import read as registry_read
-
-        entry = registry_read(key)
+        entry = registry.read(key)
         if entry is None:
             return False
 
-        registry_delete(key)
+        registry.delete(key)
 
-        if not is_alive(entry.pid):
+        if entry.pid is None or not registry.is_alive(entry.pid):
             return False
-
-        import signal
 
         try:
             os.kill(entry.pid, signal.SIGTERM)
@@ -231,7 +225,7 @@ class ServerManager:
         # Wait for the process to exit (up to 5s, then SIGKILL).
         deadline = asyncio.get_event_loop().time() + 5.0
         while asyncio.get_event_loop().time() < deadline:
-            if not is_alive(entry.pid):
+            if not registry.is_alive(entry.pid):
                 return True
             await asyncio.sleep(0.1)
         try:
@@ -242,9 +236,7 @@ class ServerManager:
 
     async def stop_all(self) -> None:
         """Kill all servers tracked in the registry."""
-        from .registry import list_all
-
-        for entry in list_all():
+        for entry in registry.list_all():
             await self.stop(entry.key)
 
     async def get_or_start(
@@ -253,43 +245,91 @@ class ServerManager:
         key: str,
         project_dir: Path,
         server_dir: Path | None,
-        materials: str | Path | list[str | Path] | None,
+        materials: Materials,
         config: dict[str, Any],
         env: dict[str, str],
         workspace: str | None = None,
         user_id: str | None = None,
     ) -> _ManagedServer:
         """Return a client for the running server, starting one if needed."""
-        from .client import OpenCodeClient
-        from .registry import delete as registry_delete
-        from .registry import is_alive
-        from .registry import read as registry_read
+        entry = registry.read(key)
+        if entry is not None and entry.state == "ready":
+            if registry.is_alive(entry.pid):
+                return self._attach(entry)
+            # Stale — the process died after finishing startup.
+            registry.delete(key)
 
-        entry = registry_read(key)
-        if entry is not None and is_alive(entry.pid):
-            return _ManagedServer(
+        # port/password are generated here (not inside _start) because a
+        # 'starting' claim row needs both up front — pid is the only field
+        # that isn't known until the subprocess actually exists.
+        port = _find_free_port()
+        password = secrets.token_urlsafe(32)
+        timestamp = registry.now_iso()
+
+        claimed = registry.claim_starting(
+            RegistryEntry(
                 key=key,
-                process=None,
-                client=OpenCodeClient(
-                    base_url=f"http://127.0.0.1:{entry.port}",
-                    password=entry.password,
-                ),
-                server_dir=Path(entry.server_dir) if entry.server_dir else None,
+                state="starting",
+                pid=None,
+                port=port,
+                password=password,
+                project_dir=str(project_dir),
+                server_dir=str(server_dir) if server_dir else None,
+                started_at=timestamp,
+                claimed_at=timestamp,
+                workspace=workspace,
+                user_id=user_id,
             )
+        )
+        if not claimed:
+            # Another caller is already starting this key — wait for it
+            # instead of racing to spawn a second process for the same key.
+            return await self._wait_for_ready(key)
 
-        # Not running — clean up stale registry entry and start fresh.
-        if entry is not None:
-            registry_delete(key)
+        try:
+            return await self._start(
+                key=key,
+                project_dir=project_dir,
+                server_dir=server_dir,
+                materials=materials,
+                config=config,
+                env=env,
+                port=port,
+                password=password,
+                workspace=workspace,
+                user_id=user_id,
+            )
+        except Exception:
+            registry.delete(key)
+            raise
 
-        return await self._start(
-            key=key,
-            project_dir=project_dir,
-            server_dir=server_dir,
-            materials=materials,
-            config=config,
-            env=env,
-            workspace=workspace,
-            user_id=user_id,
+    def _attach(self, entry: RegistryEntry) -> _ManagedServer:
+        """Build a _ManagedServer client for an already-running registry entry."""
+        return _ManagedServer(
+            key=entry.key,
+            process=None,
+            client=OpenCodeClient(
+                base_url=f"http://127.0.0.1:{entry.port}",
+                password=entry.password,
+            ),
+            server_dir=Path(entry.server_dir) if entry.server_dir else None,
+        )
+
+    async def _wait_for_ready(self, key: str, timeout: float = 60.0) -> _ManagedServer:
+        """Poll the registry until the caller holding the start-claim finishes."""
+        deadline = asyncio.get_event_loop().time() + timeout
+        while asyncio.get_event_loop().time() < deadline:
+            entry = registry.read(key)
+            if entry is None:
+                raise OpenCodeServerError(
+                    f"the caller starting server {key!r} failed before it became ready"
+                )
+            if entry.state == "ready" and registry.is_alive(entry.pid):
+                return self._attach(entry)
+            await asyncio.sleep(0.1)
+
+        raise OpenCodeTimeoutError(
+            f"timed out waiting for another caller to start the server for key {key!r}"
         )
 
     async def _start(
@@ -298,44 +338,33 @@ class ServerManager:
         key: str,
         project_dir: Path,
         server_dir: Path | None,
-        materials: str | Path | list[str | Path] | None,
+        materials: Materials,
         config: dict[str, Any],
         env: dict[str, str],
+        port: int,
+        password: str,
         workspace: str | None = None,
         user_id: str | None = None,
     ) -> _ManagedServer:
         """Start a new OpenCode instance and return a _ManagedServer."""
-        from .client import OpenCodeClient
-        from .exceptions import OpenCodeNotFoundError
-
         if shutil.which("opencode") is None:
             raise OpenCodeNotFoundError(
                 "opencode binary not found on PATH. Install it with: npm install -g opencode-ai"
             )
 
-        if server_dir is not None:
-            server_dir.mkdir(parents=True, exist_ok=True)
-            (server_dir / "tmp").mkdir(exist_ok=True)
-            _prepare_dir(server_dir, config, materials)
-
-        port = _find_free_port()
-        password = secrets.token_urlsafe(32)
-
         process_env = {**os.environ, **env}
         process_env["OPENCODE_SERVER_PASSWORD"] = password
 
         if server_dir is not None:
+            server_dir.mkdir(parents=True, exist_ok=True)
+            (server_dir / "tmp").mkdir(exist_ok=True)
+            _prepare_dir(server_dir, config, materials)
             process_env["HOME"] = str(server_dir)
             process_env["TMPDIR"] = str(server_dir / "tmp")
             process_env["OPENCODE_CONFIG"] = str(server_dir / "opencode.json")
-
-        if server_dir is not None:
-            log_file = open(server_dir / "opencode.log", "ab")
-            stdout = log_file
-            stderr = log_file
+            output: Any = open(server_dir / "opencode.log", "ab")
         else:
-            stdout = asyncio.subprocess.DEVNULL
-            stderr = asyncio.subprocess.DEVNULL
+            output = asyncio.subprocess.DEVNULL
 
         process = await asyncio.create_subprocess_exec(
             "opencode",
@@ -346,8 +375,8 @@ class ServerManager:
             str(port),
             cwd=str(project_dir),
             env=process_env,
-            stdout=stdout,
-            stderr=stderr,
+            stdout=output,
+            stderr=output,
         )
 
         client = OpenCodeClient(
@@ -369,18 +398,18 @@ class ServerManager:
             await _terminate_process(process)
             raise
 
-        from .registry import RegistryEntry, now_iso
-        from .registry import write as registry_write
-
-        registry_write(
+        timestamp = registry.now_iso()
+        registry.write(
             RegistryEntry(
                 key=key,
+                state="ready",
                 pid=process.pid,
                 port=port,
                 password=password,
                 project_dir=str(project_dir),
                 server_dir=str(server_dir) if server_dir else None,
-                started_at=now_iso(),
+                started_at=timestamp,
+                claimed_at=timestamp,
                 workspace=workspace,
                 user_id=user_id,
             )

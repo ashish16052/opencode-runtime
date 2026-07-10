@@ -1,12 +1,16 @@
 """Tests for the registry module."""
 
+import asyncio
 import os
 import stat
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
 import opencode_runtime.registry as registry
 from opencode_runtime.registry import RegistryEntry
+
+pytestmark = pytest.mark.asyncio
 
 
 @pytest.fixture(autouse=True)
@@ -18,15 +22,28 @@ def isolated_registry(tmp_path, monkeypatch):
 def make_entry(**kwargs: object) -> RegistryEntry:
     defaults: dict[str, object] = dict(
         key="abc123def456abcd",
+        state="ready",
         pid=99999,
         port=54321,
         password="secret",
         project_dir="/tmp/project",
         server_dir=None,
         started_at="2026-07-05T00:00:00+00:00",
+        claimed_at="2026-07-05T00:00:00+00:00",
     )
     defaults.update(kwargs)
     return RegistryEntry(**defaults)  # type: ignore[arg-type]
+
+
+def make_claim(**kwargs: object) -> RegistryEntry:
+    """A 'starting' entry, as claim_starting() expects — pid is unknown yet.
+
+    claimed_at defaults to now (not make_entry()'s fixed placeholder date),
+    since claim_starting()'s lease check compares it against the real clock.
+    """
+    defaults: dict[str, object] = dict(pid=None, state="starting", claimed_at=registry.now_iso())
+    defaults.update(kwargs)
+    return make_entry(**defaults)
 
 
 # ---------------------------------------------------------------------------
@@ -34,18 +51,18 @@ def make_entry(**kwargs: object) -> RegistryEntry:
 # ---------------------------------------------------------------------------
 
 
-def test_write_read_roundtrip():
+async def test_write_read_roundtrip():
     entry = make_entry()
     registry.write(entry)
     result = registry.read(entry.key)
     assert result == entry
 
 
-def test_read_returns_none_for_missing_key():
+async def test_read_returns_none_for_missing_key():
     assert registry.read("doesnotexist") is None
 
 
-def test_write_read_with_server_dir():
+async def test_write_read_with_server_dir():
     entry = make_entry(server_dir="/tmp/runtime/servers/abc123")
     registry.write(entry)
     result = registry.read(entry.key)
@@ -53,12 +70,33 @@ def test_write_read_with_server_dir():
     assert result.server_dir == "/tmp/runtime/servers/abc123"
 
 
+async def test_write_twice_replaces_entry():
+    entry = make_entry()
+    registry.write(entry)
+    updated = make_entry(pid=11111, port=22222)
+    registry.write(updated)
+    result = registry.read(entry.key)
+    assert result is not None
+    assert result.pid == 11111
+    assert result.port == 22222
+
+
+async def test_write_with_null_pid():
+    """A 'starting' row has no pid yet."""
+    entry = make_entry(state="starting", pid=None)
+    registry.write(entry)
+    result = registry.read(entry.key)
+    assert result is not None
+    assert result.pid is None
+    assert result.state == "starting"
+
+
 # ---------------------------------------------------------------------------
 # workspace / user_id
 # ---------------------------------------------------------------------------
 
 
-def test_write_read_with_workspace_and_user_id():
+async def test_write_read_with_workspace_and_user_id():
     entry = make_entry(workspace="org_a", user_id="u_1")
     registry.write(entry)
     result = registry.read(entry.key)
@@ -67,42 +105,19 @@ def test_write_read_with_workspace_and_user_id():
     assert result.user_id == "u_1"
 
 
-def test_read_old_entry_missing_workspace_defaults_to_none():
-    """Old JSON files without workspace/user_id fields should load with None defaults."""
-    import json
-
-    registry.REGISTRY_DIR.mkdir(parents=True, exist_ok=True)
-    old_data = dict(
-        key="abc123def456abcd",
-        pid=99999,
-        port=54321,
-        password="secret",
-        project_dir="/tmp/project",
-        server_dir=None,
-        started_at="2026-07-05T00:00:00+00:00",
-        # no workspace, no user_id
-    )
-    path = registry.REGISTRY_DIR / "abc123def456abcd.json"
-    path.write_text(json.dumps(old_data), encoding="utf-8")
-    result = registry.read("abc123def456abcd")
-    assert result is not None
-    assert result.workspace is None
-    assert result.user_id is None
-
-
 # ---------------------------------------------------------------------------
 # delete
 # ---------------------------------------------------------------------------
 
 
-def test_delete_removes_file():
+async def test_delete_removes_entry():
     entry = make_entry()
     registry.write(entry)
     registry.delete(entry.key)
     assert registry.read(entry.key) is None
 
 
-def test_delete_is_noop_for_missing_key():
+async def test_delete_is_noop_for_missing_key():
     registry.delete("doesnotexist")  # should not raise
 
 
@@ -111,12 +126,12 @@ def test_delete_is_noop_for_missing_key():
 # ---------------------------------------------------------------------------
 
 
-def test_list_all_empty_when_no_registry_dir():
-    # REGISTRY_DIR doesn't exist yet
+async def test_list_all_empty_when_no_registry_dir():
+    # No db file created yet
     assert registry.list_all() == []
 
 
-def test_list_all_returns_all_entries():
+async def test_list_all_returns_all_entries():
     entries = [make_entry(key=f"key{i:016x}") for i in range(3)]
     for e in entries:
         registry.write(e)
@@ -125,25 +140,84 @@ def test_list_all_returns_all_entries():
     assert {e.key for e in result} == {e.key for e in entries}
 
 
-def test_list_all_skips_invalid_files(tmp_path):
-    registry.REGISTRY_DIR.mkdir(parents=True, exist_ok=True)
-    (registry.REGISTRY_DIR / "broken.json").write_text("not json", encoding="utf-8")
-    registry.write(make_entry())
-    result = registry.list_all()
-    assert len(result) == 1
-
-
 # ---------------------------------------------------------------------------
 # file permissions
 # ---------------------------------------------------------------------------
 
 
-def test_write_sets_permissions_600():
-    entry = make_entry()
-    registry.write(entry)
-    path = registry.REGISTRY_DIR / f"{entry.key}.json"
-    mode = stat.S_IMODE(path.stat().st_mode)
+async def test_db_file_created_with_permissions_600():
+    registry.write(make_entry())
+    db_path = registry.REGISTRY_DIR / "registry.db"
+    assert db_path.exists()
+    mode = stat.S_IMODE(db_path.stat().st_mode)
     assert mode == 0o600
+
+
+# ---------------------------------------------------------------------------
+# claim_starting
+# ---------------------------------------------------------------------------
+
+
+async def test_claim_starting_succeeds_for_new_key():
+    entry = make_claim()
+    assert registry.claim_starting(entry) is True
+    result = registry.read(entry.key)
+    assert result is not None
+    assert result.state == "starting"
+    assert result.pid is None
+
+
+async def test_claim_starting_fails_for_live_claim():
+    entry = make_claim()
+    assert registry.claim_starting(entry) is True
+    other = make_claim(port=55555)
+    assert registry.claim_starting(other) is False
+    # Original claim is untouched by the failed attempt.
+    result = registry.read(entry.key)
+    assert result is not None
+    assert result.port == entry.port
+
+
+async def test_claim_starting_after_delete_succeeds():
+    entry = make_claim()
+    assert registry.claim_starting(entry) is True
+    registry.delete(entry.key)
+    assert registry.claim_starting(entry) is True
+
+
+async def test_concurrent_claim_starting_only_one_winner():
+    claims = [make_claim(), make_claim(port=55555), make_claim(port=66666)]
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        results = list(pool.map(registry.claim_starting, claims))
+    assert results.count(True) == 1
+    assert results.count(False) == 2
+
+
+async def test_claim_starting_reclaims_after_lease_expires(monkeypatch):
+    monkeypatch.setattr(registry, "_START_LEASE_SECONDS", 0)
+    entry = make_claim()
+    assert registry.claim_starting(entry) is True
+    await asyncio.sleep(0.01)
+    # No write()-to-ready call — simulates a crashed starter. A fresh claim
+    # attempt should reclaim it once the (now zero-second) lease has expired.
+    assert registry.claim_starting(make_claim(port=55555)) is True
+
+
+async def test_claim_starting_does_not_reclaim_before_lease_expires():
+    entry = make_claim()
+    assert registry.claim_starting(entry) is True
+    assert registry.claim_starting(make_claim(port=55555)) is False
+
+
+async def test_claim_starting_does_not_reclaim_ready_row():
+    """A live 'ready' row isn't touched by claim_starting's lease logic."""
+    entry = make_entry()  # state="ready"
+    registry.write(entry)
+    assert registry.claim_starting(make_claim(port=55555)) is False
+    result = registry.read(entry.key)
+    assert result is not None
+    assert result.state == "ready"
+    assert result.port == entry.port
 
 
 # ---------------------------------------------------------------------------
@@ -151,9 +225,13 @@ def test_write_sets_permissions_600():
 # ---------------------------------------------------------------------------
 
 
-def test_is_alive_current_process():
+async def test_is_alive_current_process():
     assert registry.is_alive(os.getpid()) is True
 
 
-def test_is_alive_dead_pid():
+async def test_is_alive_dead_pid():
     assert registry.is_alive(99999999) is False
+
+
+async def test_is_alive_none_pid():
+    assert registry.is_alive(None) is False
