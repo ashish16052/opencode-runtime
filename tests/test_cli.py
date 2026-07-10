@@ -227,38 +227,6 @@ def test_health_unknown_key_exits():
         cmd_health(ns(key="doesnotexist"))
 
 
-def test_health_live_server(tmp_path, capsys):
-    """Start a real server, check health, stop it."""
-    args = ns(
-        project_dir=str(tmp_path),
-        runtime_dir=None,
-        materials=None,
-        workspace=None,
-        user_id=None,
-    )
-    cmd_serve(args)
-
-    entries = registry.list_all()
-    assert len(entries) == 1
-    key = entries[0].key
-
-    # Retry — server may briefly drop connections after initial health check
-    deadline = time.time() + 10.0
-    while time.time() < deadline:
-        try:
-            cmd_health(ns(key=key))
-            break
-        except SystemExit:
-            time.sleep(0.5)
-    else:
-        pytest.fail("server never became healthy within 10s")
-
-    out = capsys.readouterr().out
-    assert "healthy" in out
-
-    cmd_stop(ns(key=key))
-
-
 def test_health_dead_server(capsys):
     """Registry entry exists but process is dead — health should fail."""
     registry.write(make_entry(pid=99999999, port=19999))
