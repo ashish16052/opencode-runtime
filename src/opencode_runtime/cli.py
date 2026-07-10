@@ -24,6 +24,7 @@ from .server import DisplayStatus, ServerManager, _compute_runtime_key
 # ---------------------------------------------------------------------------
 
 _R = "\033[0m"
+_DIM = "\033[2m"
 
 
 def _green(s: str) -> str:
@@ -43,7 +44,7 @@ def _cyan(s: str) -> str:
 
 
 def _dim(s: str) -> str:
-    return f"\033[2m{s}{_R}"
+    return f"{_DIM}{s}{_R}"
 
 
 # ---------------------------------------------------------------------------
@@ -219,8 +220,8 @@ def cmd_ps(_args: argparse.Namespace) -> None:
             vals.append(e.user_id or "-")
         vals.append(_home(e.project_dir))
         row = fmt.format(*vals)
-        row = row.replace(status_plain, status_coloured, 1)
-        print(_dim(row).replace(_dim(status_coloured), status_coloured, 1))
+        dimmed_row = _dim(row).replace(status_plain, f"{status_coloured}{_DIM}", 1)
+        print(dimmed_row)
 
 
 # ---------------------------------------------------------------------------
