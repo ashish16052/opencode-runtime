@@ -16,14 +16,13 @@ pytestmark = pytest.mark.asyncio
 
 @pytest.fixture
 async def runtime(tmp_path):
-    """Start a runtime against tmp_path and stop it after the test."""
+    """Create a runtime. Servers start lazily on first session() call."""
     r = OpenCodeRuntime(
         project_dir=tmp_path,
         runtime_dir=tmp_path / "runtime",
     )
-    await r.start()
     yield r
-    await r.stop()
+    await r.close()
 
 
 class TestRuntimeLifecycle:
@@ -32,10 +31,10 @@ class TestRuntimeLifecycle:
             project_dir=tmp_path,
             runtime_dir=tmp_path / "runtime",
         )
-        await r.start()
+        await r.session()
         assert r.runtime_dir is not None
         assert r.runtime_dir.exists()
-        await r.stop()
+        await r.close()
 
     async def test_server_running_after_start(self, tmp_path, monkeypatch):
         monkeypatch.setattr(registry, "REGISTRY_DIR", tmp_path / "reg")
@@ -43,39 +42,56 @@ class TestRuntimeLifecycle:
             project_dir=tmp_path,
             runtime_dir=tmp_path / "runtime",
         )
-        await r.start()
+        await r.session()
         entries = registry.list_all()
         assert len(entries) == 1
         assert registry.is_alive(entries[0].pid)
-        await r.stop()
+        await r.close()
 
     async def test_client_reachable_after_start(self, runtime):
         session = await runtime.session()
         health = await session.raw_client.health()
         assert health["healthy"] is True
 
-    async def test_server_gone_after_stop(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(registry, "REGISTRY_DIR", tmp_path / "reg")
-        r = OpenCodeRuntime(
-            project_dir=tmp_path,
-            runtime_dir=tmp_path / "runtime",
-        )
-        await r.start()
-        entries = registry.list_all()
-        assert len(entries) == 1
-        pid = entries[0].pid
-        await r.stop()
-        assert not registry.is_alive(pid)
-        assert registry.list_all() == []
-
-    async def test_context_manager(self, tmp_path, monkeypatch):
+    async def test_context_manager_without_server(self, tmp_path, monkeypatch):
+        """Entering and exiting context without calling session() — no server created."""
         monkeypatch.setattr(registry, "REGISTRY_DIR", tmp_path / "reg")
         async with OpenCodeRuntime(
             project_dir=tmp_path,
             runtime_dir=tmp_path / "runtime",
         ):
+            assert len(registry.list_all()) == 0
+        assert len(registry.list_all()) == 0
+
+    async def test_context_manager_with_server(self, tmp_path, monkeypatch):
+        """close() stops a server this runtime itself started."""
+        monkeypatch.setattr(registry, "REGISTRY_DIR", tmp_path / "reg")
+        async with OpenCodeRuntime(
+            project_dir=tmp_path,
+            runtime_dir=tmp_path / "runtime",
+        ) as r:
+            await r.session()
             assert len(registry.list_all()) == 1
-        assert registry.list_all() == []
+        # Server started by this runtime is stopped on close()
+        assert len(registry.list_all()) == 0
+
+    async def test_close_leaves_attached_server_running(self, tmp_path, monkeypatch):
+        """close() must not stop a server this runtime merely attached to."""
+        monkeypatch.setattr(registry, "REGISTRY_DIR", tmp_path / "reg")
+        owner = OpenCodeRuntime(project_dir=tmp_path, runtime_dir=tmp_path / "runtime")
+        await owner.session()
+        assert len(registry.list_all()) == 1
+
+        async with OpenCodeRuntime(
+            project_dir=tmp_path, runtime_dir=tmp_path / "runtime"
+        ) as attacher:
+            await attacher.session()  # same key — attaches, doesn't start
+            assert len(registry.list_all()) == 1
+        # attacher's close() ran — the server `owner` started must survive
+        assert len(registry.list_all()) == 1
+
+        await owner.close()
+        assert len(registry.list_all()) == 0
 
 
 class TestEnvIsolation:
@@ -96,57 +112,3 @@ class TestEnvIsolation:
             assert r.runtime_dir is not None
             session = await r.session()
             assert session.raw_client.base_url.startswith("http://127.0.0.1:")
-
-
-class TestRegistryIntegration:
-    async def test_registry_entry_written_on_start(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(registry, "REGISTRY_DIR", tmp_path / "reg")
-        async with OpenCodeRuntime(project_dir=tmp_path) as r:
-            session = await r.session()
-            entries = registry.list_all()
-            assert len(entries) == 1
-            port = int(session.raw_client.base_url.split(":")[-1])
-            assert entries[0].port == port
-
-    async def test_registry_entry_deleted_on_stop(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(registry, "REGISTRY_DIR", tmp_path / "reg")
-        async with OpenCodeRuntime(project_dir=tmp_path):
-            pass
-        assert registry.list_all() == []
-
-    async def test_registry_entry_stores_workspace_and_user_id(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(registry, "REGISTRY_DIR", tmp_path / "reg")
-        async with OpenCodeRuntime(project_dir=tmp_path) as r:
-            await r.session(workspace="org_a", user_id="u_1")
-            entries = registry.list_all()
-            # Two servers: default (from start()) + org_a/u_1
-            ws_entry = next((e for e in entries if e.workspace == "org_a"), None)
-            assert ws_entry is not None
-            assert ws_entry.user_id == "u_1"
-
-    async def test_library_attaches_to_existing_registry_server(self, tmp_path, monkeypatch):
-        """If a registry entry exists and PID is alive, library attaches instead of spawning."""
-        monkeypatch.setattr(registry, "REGISTRY_DIR", tmp_path / "reg")
-
-        h1 = OpenCodeRuntime(project_dir=tmp_path)
-        await h1.start()
-        entries = registry.list_all()
-        assert len(entries) == 1
-        key = entries[0].key
-        pid = entries[0].pid
-
-        # Second runtime with same config attaches to the same server
-        h2 = OpenCodeRuntime(project_dir=tmp_path)
-        await h2.start()
-        entries2 = registry.list_all()
-        assert len(entries2) == 1  # still one server, not two
-        assert entries2[0].pid == pid  # same process
-
-        # h2 stop kills the shared server (no ownership distinction)
-        await h2.stop()
-        assert not registry.is_alive(pid)
-        assert registry.read(key) is None
-
-        # h1 stop is now a no-op
-        await h1.stop()
-        assert registry.list_all() == []

@@ -21,9 +21,8 @@ async def runtime(tmp_path):
         project_dir=tmp_path,
         runtime_dir=tmp_path / "runtime",
     )
-    await h.start()
     yield h
-    await h.stop()
+    await h.close()
 
 
 @pytest.fixture
