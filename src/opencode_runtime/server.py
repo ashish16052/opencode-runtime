@@ -36,7 +36,7 @@ from .exceptions import (
     OpenCodeServerError,
     OpenCodeTimeoutError,
 )
-from .registry import RegistryEntry, ServerState
+from .registry import RegistryEntry
 
 # One or more paths to overlay into the server dir before startup.
 # Module-level alias: inside ServerManager's class body, `list[...]` in an
@@ -54,25 +54,27 @@ class _ManagedServer:
     server_dir: Path | None  # None when runtime_dir is not set (no isolation)
 
 
-class DisplayStatus(str, Enum):
-    """User-facing status derived from registry state, process liveness, and health."""
+class RuntimeStatus(str, Enum):
+    """Health of a server that has a pid, derived from OS liveness + OpenCode health.
 
-    STARTING = "starting"
+    A registry entry whose pid is still None (claimed, not yet spawned)
+    has no RuntimeStatus — see ServerStatus.status.
+    """
+
     RUNNING = "running"
     UNHEALTHY = "unhealthy"
     STALE = "stale"
-    FAILED = "failed"
-    STOPPING = "stopping"
 
 
 @dataclass
 class ServerStatus:
-    """Computed liveness/health status for a registry entry."""
+    """Computed status for a registry entry.
+
+    status is None while entry.pid hasn't been assigned yet (still starting).
+    """
 
     entry: RegistryEntry
-    process_alive: bool
-    health_ok: bool
-    display: DisplayStatus
+    status: RuntimeStatus | None
 
 
 async def _is_health_ok(client: OpenCodeClient, timeout: float = 3.0) -> bool:
@@ -82,23 +84,6 @@ async def _is_health_ok(client: OpenCodeClient, timeout: float = 3.0) -> bool:
         return True
     except Exception:
         return False
-
-
-def _compute_display_status(
-    state: ServerState, process_alive: bool, health_ok: bool, lease_expired: bool = False
-) -> DisplayStatus:
-    """Derive user-facing display status from state, process liveness, and health."""
-    if state == ServerState.STARTING:
-        return DisplayStatus.FAILED if lease_expired else DisplayStatus.STARTING
-    if state == ServerState.STOPPING:
-        return DisplayStatus.STOPPING
-    if state == ServerState.FAILED:
-        return DisplayStatus.FAILED
-    if not process_alive:
-        return DisplayStatus.STALE
-    if not health_ok:
-        return DisplayStatus.UNHEALTHY
-    return DisplayStatus.RUNNING
 
 
 def _find_free_port(host: str = "127.0.0.1") -> int:
@@ -214,29 +199,28 @@ class ServerManager:
     def find(self, key: str) -> RegistryEntry | None:
         """Return the registry entry for key, or None if not found or still starting."""
         entry = registry.read(key)
-        return entry if entry is not None and entry.state == ServerState.RUNNING else None
+        return entry if entry is not None and entry.pid is not None else None
 
     def is_alive(self, key: str) -> bool:
         """Return True if the server for key is running."""
         entry = self.find(key)
-        return entry is not None and process.is_alive(entry.pid)
+        return entry is not None and process.is_same(entry.pid, entry.pid_start_time)
 
     async def _status_for_entry(
         self, entry: RegistryEntry, *, health_timeout: float = 3.0
     ) -> ServerStatus:
         """Derive a ServerStatus for an already-fetched registry entry."""
-        process_alive = process.is_alive(entry.pid) if entry.state == ServerState.RUNNING else False
-        health_ok = False
-        if process_alive:
-            client = OpenCodeClient(
-                base_url=f"http://127.0.0.1:{entry.port}",
-                password=entry.password,
-            )
-            health_ok = await _is_health_ok(client, timeout=health_timeout)
-        display = _compute_display_status(entry.state, process_alive, health_ok)
-        return ServerStatus(
-            entry=entry, process_alive=process_alive, health_ok=health_ok, display=display
+        if entry.pid is None:
+            return ServerStatus(entry=entry, status=None)
+        if not await asyncio.to_thread(process.is_same, entry.pid, entry.pid_start_time):
+            return ServerStatus(entry=entry, status=RuntimeStatus.STALE)
+        client = OpenCodeClient(
+            base_url=f"http://127.0.0.1:{entry.port}",
+            password=entry.password,
         )
+        if not await _is_health_ok(client, timeout=health_timeout):
+            return ServerStatus(entry=entry, status=RuntimeStatus.UNHEALTHY)
+        return ServerStatus(entry=entry, status=RuntimeStatus.RUNNING)
 
     async def status(self, key: str, *, health_timeout: float = 3.0) -> ServerStatus | None:
         """Return the computed status for key, or None if not in the registry."""
@@ -252,19 +236,15 @@ class ServerManager:
     # up top for the same issue). list_statuses()'s `-> list[ServerStatus]`
     # return annotation is defined above list() to avoid it.
     async def list_statuses(self, *, health_timeout: float = 1.0) -> list[ServerStatus]:
-        """Return computed status for every ready registry entry."""
+        """Return computed status for every entry that has a pid."""
         return [
             await self._status_for_entry(entry, health_timeout=health_timeout)
-            for entry, _ in self.list()
+            for entry in self.list()
         ]
 
-    def list(self) -> list[tuple[RegistryEntry, bool]]:
-        """Return all ready registry entries with their liveness status."""
-        return [
-            (entry, process.is_alive(entry.pid))
-            for entry in registry.list_all()
-            if entry.state == ServerState.RUNNING
-        ]
+    def list(self) -> list[RegistryEntry]:
+        """Return every registry entry that has progressed past a bare claim."""
+        return [entry for entry in registry.list_all() if entry.pid is not None]
 
     async def health(self, key: str) -> dict[str, Any]:
         """Return health info for the server at key.
@@ -300,7 +280,7 @@ class ServerManager:
         async def forget() -> None:
             await asyncio.to_thread(registry.delete_if_instance, key, entry.instance_id)
 
-        if not process.is_alive(entry.pid):
+        if not process.is_same(entry.pid, entry.pid_start_time):
             await forget()
             return False
 
@@ -349,8 +329,8 @@ class ServerManager:
     ) -> _ManagedServer:
         """Return a client for the running server, starting one if needed."""
         entry = registry.read(key)
-        if entry is not None and entry.state == ServerState.RUNNING:
-            if process.is_alive(entry.pid):
+        if entry is not None and entry.pid is not None:
+            if process.is_same(entry.pid, entry.pid_start_time):
                 return self._attach(entry)
             # Stale — the process died after finishing startup. Scoped to
             # this generation so a concurrent fresh claim isn't clobbered.
@@ -367,22 +347,18 @@ class ServerManager:
         claimed = registry.claim_starting(
             RegistryEntry(
                 key=key,
-                state=ServerState.STARTING,
                 pid=None,
                 port=port,
                 password=password,
                 project_dir=str(project_dir),
                 server_dir=str(server_dir) if server_dir else None,
                 started_at=timestamp,
-                claimed_at=timestamp,
                 workspace=workspace,
                 user_id=user_id,
                 instance_id=instance_id,
             )
         )
         if not claimed:
-            # Another caller is already starting this key — wait for it
-            # instead of racing to spawn a second process for the same key.
             return await self._wait_for_ready(key)
 
         try:
@@ -427,7 +403,7 @@ class ServerManager:
                 raise OpenCodeServerError(
                     f"the caller starting server {key!r} failed before it became ready"
                 )
-            if entry.state == ServerState.RUNNING and process.is_alive(entry.pid):
+            if entry.pid is not None and process.is_same(entry.pid, entry.pid_start_time):
                 return self._attach(entry)
             await asyncio.sleep(0.1)
 
@@ -505,14 +481,12 @@ class ServerManager:
         registry.write(
             RegistryEntry(
                 key=key,
-                state=ServerState.RUNNING,
                 pid=proc.pid,
                 port=port,
                 password=password,
                 project_dir=str(project_dir),
                 server_dir=str(server_dir) if server_dir else None,
                 started_at=started_at,
-                claimed_at=started_at,
                 runtime_version=version("opencode-runtime"),
                 workspace=workspace,
                 user_id=user_id,

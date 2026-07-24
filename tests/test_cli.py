@@ -17,7 +17,7 @@ import pytest
 import opencode_runtime.registry as registry
 from opencode_runtime import process
 from opencode_runtime.cli import cmd_health, cmd_ps, cmd_serve, cmd_stop, cmd_stop_all
-from opencode_runtime.registry import RegistryEntry, ServerState
+from opencode_runtime.registry import RegistryEntry
 
 
 # ---------------------------------------------------------------------------
@@ -39,14 +39,12 @@ def ns(**kwargs: object) -> argparse.Namespace:
 def make_entry(**kwargs: object) -> RegistryEntry:
     defaults: dict[str, object] = dict(
         key="abc123def456abcd",
-        state=ServerState.RUNNING,
         pid=os.getpid(),  # alive by default
         port=54321,
         password="secret",
         project_dir="/tmp/project",
         server_dir=None,
         started_at="2026-07-05T00:00:00+00:00",
-        claimed_at="2026-07-05T00:00:00+00:00",
         workspace=None,
         user_id=None,
     )
@@ -123,7 +121,7 @@ def test_stop_starting_entry_is_removed(capsys):
     stoppable by key, not just entries with a pid — cmd_stop used to look
     it up via find(), which filters to entries with a pid and reported
     claims as "not found"."""
-    registry.write(make_entry(state=ServerState.STARTING, pid=None))
+    registry.write(make_entry(pid=None))
     cmd_stop(ns(key="abc123def456abcd"))
     out = capsys.readouterr().out
     assert "Server stopped" in out

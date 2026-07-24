@@ -11,7 +11,7 @@ import pytest
 
 import opencode_runtime.registry as registry
 from opencode_runtime.exceptions import RegistryBusyError
-from opencode_runtime.registry import RegistryEntry, ServerState
+from opencode_runtime.registry import RegistryEntry
 
 pytestmark = pytest.mark.asyncio
 
@@ -25,14 +25,12 @@ def isolated_registry(tmp_path, monkeypatch):
 def make_entry(**kwargs: object) -> RegistryEntry:
     defaults: dict[str, object] = dict(
         key="abc123def456abcd",
-        state=ServerState.RUNNING,
         pid=99999,
         port=54321,
         password="secret",
         project_dir="/tmp/project",
         server_dir=None,
         started_at="2026-07-05T00:00:00+00:00",
-        claimed_at="2026-07-05T00:00:00+00:00",
     )
     defaults.update(kwargs)
     return RegistryEntry(**defaults)  # type: ignore[arg-type]
@@ -41,16 +39,10 @@ def make_entry(**kwargs: object) -> RegistryEntry:
 def make_claim(**kwargs: object) -> RegistryEntry:
     """A claim entry, as claim_starting() expects — pid is unknown yet.
 
-    started_at/claimed_at default to now (not make_entry()'s fixed placeholder date),
+    started_at defaults to now (not make_entry()'s fixed placeholder date),
     since claim_starting()'s lease check compares it against the real clock.
     """
-    now = registry.now_iso()
-    defaults: dict[str, object] = dict(
-        state=ServerState.STARTING,
-        pid=None,
-        started_at=now,
-        claimed_at=now,
-    )
+    defaults: dict[str, object] = dict(pid=None, started_at=registry.now_iso())
     defaults.update(kwargs)
     return make_entry(**defaults)
 

@@ -22,7 +22,6 @@ import uuid
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, fields
 from datetime import datetime, timedelta, timezone
-from enum import Enum
 from pathlib import Path
 from typing import Generator
 
@@ -44,15 +43,6 @@ _START_LEASE_SECONDS = 90
 _LOCK_STALE_SECONDS = 5
 
 
-class ServerState(str, Enum):
-    """Server lifecycle state (kept for server.py compatibility)."""
-
-    STARTING = "starting"
-    RUNNING = "running"
-    STOPPING = "stopping"
-    FAILED = "failed"
-
-
 @dataclass
 class RegistryEntry:
     """A server entry in the registry.
@@ -65,14 +55,12 @@ class RegistryEntry:
     """
 
     key: str
-    state: ServerState
     pid: int | None
     port: int
     password: str
     project_dir: str
     server_dir: str | None
-    started_at: str  # ISO-8601
-    claimed_at: str  # ISO-8601; only meaningful while state == "starting"
+    started_at: str  # ISO-8601; when this generation was claimed
     workspace: str | None = None
     user_id: str | None = None
     runtime_version: str | None = None
@@ -172,7 +160,7 @@ def claim_starting(entry: RegistryEntry) -> bool:
         if existing is not None:
             if existing.pid is not None:
                 return False
-            claimed_at = datetime.fromisoformat(existing.claimed_at)
+            claimed_at = datetime.fromisoformat(existing.started_at)
             if datetime.now(timezone.utc) - claimed_at < timedelta(seconds=_START_LEASE_SECONDS):
                 return False
         write(entry)
