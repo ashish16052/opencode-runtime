@@ -41,11 +41,11 @@ async def test_is_same_true_for_matching_pid_and_start_time():
 async def test_is_same_false_for_mismatched_start_time():
     """A pid that's alive but whose start time doesn't match is a different
     process generation — e.g. the original died and the pid was reused."""
-    assert process.is_same(os.getpid(), "Mon Jan  1 00:00:00 1990") is False
+    assert process.is_same(os.getpid(), 0.0) is False
 
 
 async def test_is_same_false_for_dead_pid():
-    assert process.is_same(99999999, "whatever") is False
+    assert process.is_same(99999999, 0.0) is False
 
 
 async def test_is_same_falls_back_to_liveness_when_start_time_unknown():
