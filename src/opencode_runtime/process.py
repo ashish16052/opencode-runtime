@@ -12,8 +12,9 @@ from __future__ import annotations
 import asyncio
 import os
 import signal
-import subprocess
 from typing import Any
+
+import psutil
 
 
 async def spawn(
@@ -35,35 +36,34 @@ async def spawn(
 
 
 def is_alive(pid: int | None) -> bool:
-    """Return True if pid is set and a process with it is running."""
+    """Return True if pid is set and a non-zombie process with it is running.
+
+    psutil.Process.is_running() returns False for zombie processes, unlike
+    os.kill(pid, 0) which returns True for zombies on Linux.
+    """
     if pid is None:
         return False
     try:
-        os.kill(pid, 0)
-        return True
-    except (ProcessLookupError, PermissionError):
+        return psutil.Process(pid).is_running()
+    except psutil.NoSuchProcess:
         return False
 
 
-def start_time(pid: int | None) -> str | None:
-    """Return pid's process start time as reported by `ps`, or None if it's not running."""
+def start_time(pid: int | None) -> float | None:
+    """Return pid's process creation time as a Unix timestamp, or None.
+
+    Uses psutil for a portable, zombie-aware result on all platforms.
+    """
     if pid is None:
         return None
     try:
-        result = subprocess.run(
-            ["ps", "-o", "lstart=", "-p", str(pid)],
-            capture_output=True,
-            text=True,
-            timeout=3.0,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError):
+        return psutil.Process(pid).create_time()
+    except psutil.NoSuchProcess:
         return None
-    return result.stdout.strip() or None
 
 
-def is_same(pid: int | None, started_at: str | None) -> bool:
-    """Return True if pid is alive and, when started_at is known, still matches it.
+def is_same(pid: int | None, started_at: float | None) -> bool:
+    """Return True if pid is alive and its creation time matches started_at.
 
     started_at is None for entries written before this field existed —
     those fall back to a plain liveness check.
@@ -96,7 +96,7 @@ async def terminate(process: asyncio.subprocess.Process) -> None:
         kill_group(process.pid, signal.SIGKILL)
 
 
-async def wait_until_dead(pid: int, started_at: str | None, timeout: float) -> bool:
+async def wait_until_dead(pid: int, started_at: float | None, timeout: float) -> bool:
     """Poll until pid is confirmed gone, or timeout elapses."""
     deadline = asyncio.get_event_loop().time() + timeout
     while asyncio.get_event_loop().time() < deadline:

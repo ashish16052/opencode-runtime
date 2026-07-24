@@ -65,7 +65,7 @@ class RegistryEntry:
     user_id: str | None = None
     runtime_version: str | None = None
     instance_id: str | None = None
-    pid_start_time: str | None = None
+    pid_start_time: float | None = None
 
 
 _FIELD_NAMES = {f.name for f in fields(RegistryEntry)}
