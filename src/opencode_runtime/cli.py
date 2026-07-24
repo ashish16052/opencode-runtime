@@ -17,7 +17,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .server import DisplayStatus, ServerManager, _compute_runtime_key
+from .server import RuntimeStatus, ServerManager, _compute_runtime_key
 
 # ---------------------------------------------------------------------------
 # ANSI
@@ -63,27 +63,27 @@ def _row(label: str, value: str) -> None:
     print(f"  {_cyan(f'{label:<9}')}  {value}")
 
 
-_STATUS_ICONS: dict[DisplayStatus, str] = {
-    DisplayStatus.RUNNING: "●",
-    DisplayStatus.STARTING: "◐",
-    DisplayStatus.UNHEALTHY: "▲",
-    DisplayStatus.STALE: "○",
-    DisplayStatus.FAILED: "✗",
+# None means "claimed but not yet spawned" (ServerStatus.status while pid is None).
+_STATUS_ICONS: dict[RuntimeStatus | None, str] = {
+    None: "◐",
+    RuntimeStatus.RUNNING: "●",
+    RuntimeStatus.UNHEALTHY: "▲",
+    RuntimeStatus.STALE: "○",
 }
 _STATUS_COLORS = {
-    DisplayStatus.RUNNING: _green,
-    DisplayStatus.STARTING: _yellow,
-    DisplayStatus.UNHEALTHY: _red,
-    DisplayStatus.STALE: _dim,
-    DisplayStatus.FAILED: _red,
+    None: _yellow,
+    RuntimeStatus.RUNNING: _green,
+    RuntimeStatus.UNHEALTHY: _red,
+    RuntimeStatus.STALE: _dim,
 }
 
 
-def _status_display(status: DisplayStatus) -> str:
-    """Render a ServerStatus.display value as a coloured icon + label."""
+def _status_display(status: RuntimeStatus | None) -> str:
+    """Render a ServerStatus.status value as a coloured icon + label."""
     icon = _STATUS_ICONS.get(status, "?")
     color = _STATUS_COLORS.get(status, _dim)
-    return color(f"{icon} {status.value}")
+    label = status.value if status is not None else "starting"
+    return color(f"{icon} {label}")
 
 
 # ---------------------------------------------------------------------------
@@ -183,10 +183,10 @@ def cmd_ps(_args: argparse.Namespace) -> None:
 
     for st in statuses:
         e = st.entry
-        status_plain = f"{_STATUS_ICONS.get(st.display, '?')} {st.display.value}"
-        status_coloured = _status_display(st.display)
+        label = st.status.value if st.status is not None else "starting"
+        status_plain = f"{_STATUS_ICONS.get(st.status, '?')} {label}"
+        status_coloured = _status_display(st.status)
 
-        # Compute uptime
         try:
             started = datetime.fromisoformat(e.started_at)
             uptime_secs = int((datetime.now(timezone.utc) - started).total_seconds())
@@ -247,7 +247,7 @@ def cmd_stop_all(_args: argparse.Namespace) -> None:
     asyncio.run(manager.stop_all())
 
     print(f"{_green(f'✓ Stopped {len(entries)} server(s)')}\n")
-    for e, _ in entries:
+    for e in entries:
         print(f"  {_dim(e.key)}   {_dim(f'pid {e.pid}')}")
 
 
@@ -263,7 +263,14 @@ def cmd_health(args: argparse.Namespace) -> None:
         sys.exit(_red(f"✗ ID {args.key!r} not found in registry"))
     entry = st.entry
 
-    if st.display == DisplayStatus.RUNNING:
+    if st.status is None:
+        try:
+            claimed = datetime.fromisoformat(entry.started_at)
+            age_secs = int((datetime.now(timezone.utc) - claimed).total_seconds())
+            sys.exit(_yellow(f"◐ starting: claimed {age_secs}s ago, health check pending"))
+        except Exception:
+            sys.exit(_yellow("◐ starting: awaiting health check"))
+    elif st.status == RuntimeStatus.RUNNING:
         try:
             result = asyncio.run(manager.health(args.key))
             version = result.get("version")
@@ -274,25 +281,14 @@ def cmd_health(args: argparse.Namespace) -> None:
             )
         except Exception as exc:
             sys.exit(_red(f"✗ unhealthy: /global/health failed: {exc}"))
-    elif st.display == DisplayStatus.STARTING:
-        try:
-            claimed = datetime.fromisoformat(entry.claimed_at)
-            age_secs = int((datetime.now(timezone.utc) - claimed).total_seconds())
-            sys.exit(_yellow(f"◐ starting: claimed {age_secs}s ago, health check pending"))
-        except Exception:
-            sys.exit(_yellow("◐ starting: awaiting health check"))
-    elif st.display == DisplayStatus.UNHEALTHY:
+    elif st.status == RuntimeStatus.UNHEALTHY:
         sys.exit(
             _red(
                 f"✗ unhealthy: process running (pid {entry.pid}) but /global/health endpoint failed"
             )
         )
-    elif st.display == DisplayStatus.STALE:
-        sys.exit(_red(f"✗ stale: registry entry exists but pid {entry.pid} is not running"))
-    elif st.display == DisplayStatus.FAILED:
-        sys.exit(_red("✗ failed: startup failed or lease expired"))
     else:
-        sys.exit(_red(f"✗ unknown: {st.display}"))
+        sys.exit(_red(f"✗ stale: registry entry exists but pid {entry.pid} is not running"))
 
 
 # ---------------------------------------------------------------------------
@@ -307,7 +303,6 @@ def cmd_inspect(args: argparse.Namespace) -> None:
         sys.exit(_red(f"✗ ID {args.key!r} not found in registry"))
     entry = st.entry
 
-    # Compute uptime
     try:
         started = datetime.fromisoformat(entry.started_at)
         uptime_secs = int((datetime.now(timezone.utc) - started).total_seconds())
@@ -322,7 +317,7 @@ def cmd_inspect(args: argparse.Namespace) -> None:
 
     print()
     _row("ID", entry.key)
-    _row("Status", _status_display(st.display))
+    _row("Status", _status_display(st.status))
     _row("Project", _home(entry.project_dir))
     if entry.workspace:
         _row("Workspace", entry.workspace)
