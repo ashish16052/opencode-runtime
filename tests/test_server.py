@@ -10,12 +10,11 @@ from pathlib import Path
 
 import pytest
 
-import opencode_runtime.registry as registry
-from opencode_runtime.registry import ServerState
+from opencode_runtime import process, registry
 from opencode_runtime.server import (
     ServerManager,
-    _ManagedServer,
     _compute_runtime_key,
+    _ManagedServer,
 )
 
 
@@ -97,7 +96,7 @@ class TestServerManager:
         )
         entry = registry.read(key)
         assert entry is not None
-        assert registry.is_alive(entry.pid)
+        assert process.is_alive(entry.pid)
         assert server.client is not None
         await manager.stop_all()
 
@@ -176,8 +175,8 @@ class TestServerManager:
 
         await manager.stop_all()
 
-        assert not registry.is_alive(e1_before.pid)
-        assert not registry.is_alive(e2_before.pid)
+        assert not process.is_alive(e1_before.pid)
+        assert not process.is_alive(e2_before.pid)
         assert registry.read(k1) is None
         assert registry.read(k2) is None
 
@@ -226,9 +225,9 @@ class TestServerManager:
 
         await manager.stop(k1)
         assert registry.read(k1) is None
-        assert not registry.is_alive(e1.pid)
+        assert not process.is_alive(e1.pid)
         assert registry.read(k2) is not None  # still running
-        assert registry.is_alive(e2.pid)
+        assert process.is_alive(e2.pid)
         await manager.stop_all()
 
     async def test_stop_nonexistent_key_is_noop(self, tmp_path):
@@ -252,7 +251,7 @@ class TestServerManagerRegistry:
         )
         entry = registry.read(key)
         assert entry is not None
-        assert registry.is_alive(entry.pid)
+        assert process.is_alive(entry.pid)
         assert entry.port == int(server.client.base_url.split(":")[-1])
         await manager.stop_all()
 
@@ -301,7 +300,7 @@ class TestServerManagerRegistry:
         # manager2 stop kills the process and deletes registry
         await manager2.stop(key)
         assert registry.read(key) is None
-        assert not registry.is_alive(e1.pid)
+        assert not process.is_alive(e1.pid)
 
         # manager1 stop is now a no-op (already gone)
         await manager1.stop_all()
@@ -316,14 +315,12 @@ class TestServerManagerRegistry:
         registry.write(
             RegistryEntry(
                 key=key,
-                state=ServerState.RUNNING,
                 pid=99999999,
                 port=54321,
                 password="stale",
                 project_dir=str(tmp_path),
                 server_dir=None,
                 started_at=timestamp,
-                claimed_at=timestamp,
             )
         )
 
@@ -339,7 +336,7 @@ class TestServerManagerRegistry:
         # Fresh server was spawned — registry has a new alive entry
         entry = registry.read(key)
         assert entry is not None
-        assert registry.is_alive(entry.pid)
+        assert process.is_alive(entry.pid)
         assert entry.pid != 99999999
         assert entry.port == int(server.client.base_url.split(":")[-1])
         await manager.stop_all()
@@ -398,7 +395,7 @@ class TestServerManagerRegistry:
         new_entry = registry.read(key)
         assert new_entry is not None
         assert new_entry.pid != old_pid
-        assert registry.is_alive(new_entry.pid)
+        assert process.is_alive(new_entry.pid)
         await manager.stop_all()
 
 
@@ -468,8 +465,7 @@ class TestServerManagerQuery:
         )
         entries = manager.list()
         assert len(entries) == 2
-        assert all(alive is True for _, alive in entries)
-        keys = {e.key for e, _ in entries}
+        keys = {e.key for e in entries}
         assert k1 in keys and k2 in keys
         await manager.stop_all()
 
@@ -529,14 +525,12 @@ class TestServerManagerQuery:
         registry.write(
             RegistryEntry(
                 key=key,
-                state=ServerState.RUNNING,
                 pid=99999999,
                 port=54321,
                 password="x",
                 project_dir=str(tmp_path),
                 server_dir=None,
                 started_at=timestamp,
-                claimed_at=timestamp,
             )
         )
         was_alive = await ServerManager().stop(key)
@@ -559,14 +553,12 @@ class TestGetOrStartConcurrency:
             registry.write(
                 RegistryEntry(
                     key=key,
-                    state=ServerState.RUNNING,
                     pid=os.getpid(),
                     port=port,
                     password=password,
                     project_dir=str(tmp_path),
                     server_dir=None,
                     started_at=timestamp,
-                    claimed_at=timestamp,
                 )
             )
             return _ManagedServer(key=key, process=None, client=None, server_dir=None)  # type: ignore[arg-type]
@@ -647,7 +639,7 @@ class TestGetOrStartConcurrency:
         monkeypatch.setattr(ServerManager, "_start", always_fails)
         manager = ServerManager()
 
-        with pytest.raises(Exception):
+        with pytest.raises(Exception):  # noqa: B017
             await asyncio.gather(
                 manager.get_or_start(
                     key=key,

@@ -14,9 +14,5 @@ class OpenCodeTimeoutError(OpenCodeRuntimeError):
     """Raised when a health check or request exceeds the allowed timeout."""
 
 
-class RegistrySchemaError(OpenCodeRuntimeError):
-    """Raised when the registry database's schema version can't be handled.
-
-    Either it's newer than this version of opencode-runtime understands, or
-    no migration is registered to bring it up to the current version.
-    """
+class RegistryBusyError(OpenCodeRuntimeError):
+    """Raised when a registry entry's lock can't be acquired."""

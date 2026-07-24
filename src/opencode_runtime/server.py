@@ -15,6 +15,7 @@ import secrets
 import shutil
 import signal
 import socket
+import uuid
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -27,7 +28,7 @@ except ImportError:
 
 import httpx
 
-from . import registry
+from . import process, registry
 from .client import OpenCodeClient
 from .exceptions import (
     OpenCodeNotFoundError,
@@ -35,7 +36,7 @@ from .exceptions import (
     OpenCodeServerError,
     OpenCodeTimeoutError,
 )
-from .registry import RegistryEntry, ServerState
+from .registry import RegistryEntry
 
 # One or more paths to overlay into the server dir before startup.
 # Module-level alias: inside ServerManager's class body, `list[...]` in an
@@ -53,30 +54,27 @@ class _ManagedServer:
     server_dir: Path | None  # None when runtime_dir is not set (no isolation)
 
 
-class DisplayStatus(str, Enum):
-    """User-facing status derived from registry state, process liveness, and health."""
+class RuntimeStatus(str, Enum):
+    """Health of a server that has a pid, derived from OS liveness + OpenCode health.
 
-    STARTING = "starting"
+    A registry entry whose pid is still None (claimed, not yet spawned)
+    has no RuntimeStatus — see ServerStatus.status.
+    """
+
     RUNNING = "running"
     UNHEALTHY = "unhealthy"
     STALE = "stale"
-    FAILED = "failed"
-    STOPPING = "stopping"
 
 
 @dataclass
 class ServerStatus:
-    """Computed liveness/health status for a registry entry."""
+    """Computed status for a registry entry.
+
+    status is None while entry.pid hasn't been assigned yet (still starting).
+    """
 
     entry: RegistryEntry
-    process_alive: bool
-    health_ok: bool
-    display: DisplayStatus
-
-
-def _is_process_alive(pid: int | None) -> bool:
-    """Return True if pid is set and a process with it is running."""
-    return registry.is_alive(pid)
+    status: RuntimeStatus | None
 
 
 async def _is_health_ok(client: OpenCodeClient, timeout: float = 3.0) -> bool:
@@ -84,25 +82,8 @@ async def _is_health_ok(client: OpenCodeClient, timeout: float = 3.0) -> bool:
     try:
         await asyncio.wait_for(client.health(), timeout=timeout)
         return True
-    except Exception:
+    except Exception:  # noqa: BLE001 — any network/timeout/parse error means unhealthy
         return False
-
-
-def _compute_display_status(
-    state: ServerState, process_alive: bool, health_ok: bool, lease_expired: bool = False
-) -> DisplayStatus:
-    """Derive user-facing display status from state, process liveness, and health."""
-    if state == ServerState.STARTING:
-        return DisplayStatus.FAILED if lease_expired else DisplayStatus.STARTING
-    if state == ServerState.STOPPING:
-        return DisplayStatus.STOPPING
-    if state == ServerState.FAILED:
-        return DisplayStatus.FAILED
-    if not process_alive:
-        return DisplayStatus.STALE
-    if not health_ok:
-        return DisplayStatus.UNHEALTHY
-    return DisplayStatus.RUNNING
 
 
 def _find_free_port(host: str = "127.0.0.1") -> int:
@@ -127,7 +108,7 @@ async def _wait_healthy(
         try:
             await client.health()
             return
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — any network/timeout/parse error while polling
             last_exc = exc
             await asyncio.sleep(1.0)
 
@@ -163,23 +144,6 @@ def _prepare_dir(
                         shutil.copy2(item, dest)
             else:
                 shutil.copy2(src, server_dir / src.name)
-
-
-async def _terminate_process(process: asyncio.subprocess.Process) -> None:
-    """Terminate a process gracefully, kill if it doesn't exit within 5s."""
-    if process.returncode is not None:
-        return  # already exited
-    try:
-        process.terminate()
-    except ProcessLookupError:
-        return  # already dead
-    try:
-        await asyncio.wait_for(process.wait(), timeout=5.0)
-    except asyncio.TimeoutError:
-        try:
-            process.kill()
-        except ProcessLookupError:
-            pass
 
 
 def _compute_runtime_key(
@@ -235,38 +199,28 @@ class ServerManager:
     def find(self, key: str) -> RegistryEntry | None:
         """Return the registry entry for key, or None if not found or still starting."""
         entry = registry.read(key)
-        return entry if entry is not None and entry.state == ServerState.RUNNING else None
+        return entry if entry is not None and entry.pid is not None else None
 
     def is_alive(self, key: str) -> bool:
         """Return True if the server for key is running."""
         entry = self.find(key)
-        return entry is not None and registry.is_alive(entry.pid)
-
-    def touch(self, key: str) -> None:
-        """Update last_used_at timestamp for a server. Call after session creation."""
-        entry = registry.read(key)
-        if entry is not None and entry.state == ServerState.RUNNING:
-            entry.last_used_at = registry.now_iso()
-            registry.write(entry)
+        return entry is not None and process.is_same(entry.pid, entry.pid_start_time)
 
     async def _status_for_entry(
         self, entry: RegistryEntry, *, health_timeout: float = 3.0
     ) -> ServerStatus:
         """Derive a ServerStatus for an already-fetched registry entry."""
-        process_alive = (
-            _is_process_alive(entry.pid) if entry.state == ServerState.RUNNING else False
+        if entry.pid is None:
+            return ServerStatus(entry=entry, status=None)
+        if not await asyncio.to_thread(process.is_same, entry.pid, entry.pid_start_time):
+            return ServerStatus(entry=entry, status=RuntimeStatus.STALE)
+        client = OpenCodeClient(
+            base_url=f"http://127.0.0.1:{entry.port}",
+            password=entry.password,
         )
-        health_ok = False
-        if process_alive:
-            client = OpenCodeClient(
-                base_url=f"http://127.0.0.1:{entry.port}",
-                password=entry.password,
-            )
-            health_ok = await _is_health_ok(client, timeout=health_timeout)
-        display = _compute_display_status(entry.state, process_alive, health_ok)
-        return ServerStatus(
-            entry=entry, process_alive=process_alive, health_ok=health_ok, display=display
-        )
+        if not await _is_health_ok(client, timeout=health_timeout):
+            return ServerStatus(entry=entry, status=RuntimeStatus.UNHEALTHY)
+        return ServerStatus(entry=entry, status=RuntimeStatus.RUNNING)
 
     async def status(self, key: str, *, health_timeout: float = 3.0) -> ServerStatus | None:
         """Return the computed status for key, or None if not in the registry."""
@@ -282,19 +236,15 @@ class ServerManager:
     # up top for the same issue). list_statuses()'s `-> list[ServerStatus]`
     # return annotation is defined above list() to avoid it.
     async def list_statuses(self, *, health_timeout: float = 1.0) -> list[ServerStatus]:
-        """Return computed status for every ready registry entry."""
+        """Return computed status for every entry that has a pid."""
         return [
             await self._status_for_entry(entry, health_timeout=health_timeout)
-            for entry, _ in self.list()
+            for entry in self.list()
         ]
 
-    def list(self) -> list[tuple[RegistryEntry, bool]]:
-        """Return all ready registry entries with their liveness status."""
-        return [
-            (entry, registry.is_alive(entry.pid))
-            for entry in registry.list_all()
-            if entry.state == ServerState.RUNNING
-        ]
+    def list(self) -> list[RegistryEntry]:
+        """Return every registry entry that has progressed past a bare claim."""
+        return [entry for entry in registry.list_all() if entry.pid is not None]
 
     async def health(self, key: str) -> dict[str, Any]:
         """Return health info for the server at key.
@@ -318,33 +268,37 @@ class ServerManager:
     async def stop(self, key: str) -> bool:
         """Kill the server for key and remove its registry entry.
 
-        Returns True if the process was alive and killed, False if it was
-        already dead or not found in the registry.
+        Returns True if the process was alive and was confirmed killed,
+        False if it was already dead, not found, or couldn't be confirmed
+        dead (in which case the entry is left in place, still discoverable,
+        rather than forgotten while the process may still be running).
         """
         entry = registry.read(key)
         if entry is None:
             return False
 
-        registry.delete(key)
+        async def forget() -> None:
+            await asyncio.to_thread(registry.delete_if_instance, key, entry.instance_id)
 
-        if entry.pid is None or not registry.is_alive(entry.pid):
+        if not process.is_same(entry.pid, entry.pid_start_time):
+            await forget()
             return False
 
-        try:
-            os.kill(entry.pid, signal.SIGTERM)
-        except ProcessLookupError:
+        assert entry.pid is not None
+        if not process.kill_group(entry.pid, signal.SIGTERM):
+            await forget()
             return False
-        # Wait for the process to exit (up to 5s, then SIGKILL).
-        deadline = asyncio.get_event_loop().time() + 5.0
-        while asyncio.get_event_loop().time() < deadline:
-            if not registry.is_alive(entry.pid):
-                return True
-            await asyncio.sleep(0.1)
-        try:
-            os.kill(entry.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        return True
+
+        if await process.wait_until_dead(entry.pid, entry.pid_start_time, timeout=5.0):
+            await forget()
+            return True
+
+        process.kill_group(entry.pid, signal.SIGKILL)
+        if await process.wait_until_dead(entry.pid, entry.pid_start_time, timeout=2.0):
+            await forget()
+            return True
+
+        return False
 
     async def stop_all(self) -> None:
         """Kill all servers tracked in the registry."""
@@ -375,37 +329,36 @@ class ServerManager:
     ) -> _ManagedServer:
         """Return a client for the running server, starting one if needed."""
         entry = registry.read(key)
-        if entry is not None and entry.state == ServerState.RUNNING:
-            if registry.is_alive(entry.pid):
+        if entry is not None and entry.pid is not None:
+            if process.is_same(entry.pid, entry.pid_start_time):
                 return self._attach(entry)
-            # Stale — the process died after finishing startup.
-            registry.delete(key)
+            # Stale — the process died after finishing startup. Scoped to
+            # this generation so a concurrent fresh claim isn't clobbered.
+            registry.delete_if_instance(key, entry.instance_id)
 
-        # port/password are generated here (not inside _start) because a
-        # 'starting' claim row needs both up front — pid is the only field
+        # port/password/instance_id are generated here (not inside _start)
+        # because a claim needs them all up front — pid is the only field
         # that isn't known until the subprocess actually exists.
         port = _find_free_port()
         password = secrets.token_urlsafe(32)
+        instance_id = uuid.uuid4().hex
         timestamp = registry.now_iso()
 
         claimed = registry.claim_starting(
             RegistryEntry(
                 key=key,
-                state=ServerState.STARTING,
                 pid=None,
                 port=port,
                 password=password,
                 project_dir=str(project_dir),
                 server_dir=str(server_dir) if server_dir else None,
                 started_at=timestamp,
-                claimed_at=timestamp,
                 workspace=workspace,
                 user_id=user_id,
+                instance_id=instance_id,
             )
         )
         if not claimed:
-            # Another caller is already starting this key — wait for it
-            # instead of racing to spawn a second process for the same key.
             return await self._wait_for_ready(key)
 
         try:
@@ -418,11 +371,13 @@ class ServerManager:
                 env=env,
                 port=port,
                 password=password,
+                instance_id=instance_id,
+                started_at=timestamp,
                 workspace=workspace,
                 user_id=user_id,
             )
         except Exception:
-            registry.delete(key)
+            registry.delete_if_instance(key, instance_id)
             raise
         self._owned.add(key)
         return server
@@ -448,7 +403,7 @@ class ServerManager:
                 raise OpenCodeServerError(
                     f"the caller starting server {key!r} failed before it became ready"
                 )
-            if entry.state == ServerState.RUNNING and registry.is_alive(entry.pid):
+            if entry.pid is not None and process.is_same(entry.pid, entry.pid_start_time):
                 return self._attach(entry)
             await asyncio.sleep(0.1)
 
@@ -467,6 +422,8 @@ class ServerManager:
         env: dict[str, str],
         port: int,
         password: str,
+        instance_id: str,
+        started_at: str,
         workspace: str | None = None,
         user_id: str | None = None,
     ) -> _ManagedServer:
@@ -486,11 +443,11 @@ class ServerManager:
             process_env["HOME"] = str(server_dir)
             process_env["TMPDIR"] = str(server_dir / "tmp")
             process_env["OPENCODE_CONFIG"] = str(server_dir / "opencode.json")
-            output: Any = open(server_dir / "opencode.log", "ab")
+            output: Any = open(server_dir / "opencode.log", "ab")  # noqa: ASYNC230, SIM115
         else:
             output = asyncio.subprocess.DEVNULL
 
-        process = await asyncio.create_subprocess_exec(
+        proc = await process.spawn(
             "opencode",
             "serve",
             "--hostname",
@@ -499,8 +456,7 @@ class ServerManager:
             str(port),
             cwd=str(project_dir),
             env=process_env,
-            stdout=output,
-            stderr=output,
+            output=output,
         )
 
         client = OpenCodeClient(
@@ -517,33 +473,31 @@ class ServerManager:
         )
 
         try:
-            await _wait_healthy(poll_client, process=process)
+            await _wait_healthy(poll_client, process=proc)
         except Exception:
-            await _terminate_process(process)
+            await process.terminate(proc)
             raise
 
-        timestamp = registry.now_iso()
         registry.write(
             RegistryEntry(
                 key=key,
-                state=ServerState.RUNNING,
-                pid=process.pid,
+                pid=proc.pid,
                 port=port,
                 password=password,
                 project_dir=str(project_dir),
                 server_dir=str(server_dir) if server_dir else None,
-                started_at=timestamp,
-                claimed_at=timestamp,
-                last_used_at=timestamp,
+                started_at=started_at,
                 runtime_version=version("opencode-runtime"),
                 workspace=workspace,
                 user_id=user_id,
+                instance_id=instance_id,
+                pid_start_time=process.start_time(proc.pid),
             )
         )
 
         return _ManagedServer(
             key=key,
-            process=process,
+            process=proc,
             client=client,
             server_dir=server_dir,
         )

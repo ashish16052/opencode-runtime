@@ -162,64 +162,63 @@ class OpenCodeClient:
 
         Only ``sync`` bus-noise events are suppressed.
         """
-        async with self._http() as http:
-            async with http.stream("GET", "/global/event") as r:
+        async with self._http() as http, http.stream("GET", "/global/event") as r:
+            try:
+                r.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                raise OpenCodeServerError(
+                    f"SSE /global/event returned {exc.response.status_code}"
+                ) from exc
+
+            async for line in r.aiter_lines():
+                line = line.strip()
+
+                if not line.startswith("data:"):
+                    continue
+
+                raw_data = line[len("data:") :].strip()
+                if not raw_data:
+                    continue
+
                 try:
-                    r.raise_for_status()
-                except httpx.HTTPStatusError as exc:
-                    raise OpenCodeServerError(
-                        f"SSE /global/event returned {exc.response.status_code}"
-                    ) from exc
+                    envelope = json.loads(raw_data)
+                except json.JSONDecodeError:
+                    continue
 
-                async for line in r.aiter_lines():
-                    line = line.strip()
+                # /global/event wraps each event: {"payload": {"type": ..., "properties": ...}}
+                payload = envelope.get("payload", {})
+                if not isinstance(payload, dict):
+                    continue
 
-                    if not line.startswith("data:"):
-                        continue
+                event_type = payload.get("type", "")
 
-                    raw_data = line[len("data:") :].strip()
-                    if not raw_data:
-                        continue
+                # Suppress internal bus noise — never useful to callers.
+                if event_type == "sync":
+                    continue
 
-                    try:
-                        envelope = json.loads(raw_data)
-                    except json.JSONDecodeError:
-                        continue
+                props = payload.get("properties", {})
+                if not isinstance(props, dict):
+                    props = {}
 
-                    # /global/event wraps each event: {"payload": {"type": ..., "properties": ...}}
-                    payload = envelope.get("payload", {})
-                    if not isinstance(payload, dict):
-                        continue
+                # Filter to this session (events without sessionID are global, pass through)
+                sid = props.get("sessionID")
+                if sid is not None and sid != session_id:
+                    continue
 
-                    event_type = payload.get("type", "")
+                # Derive a convenience text field where it naturally exists,
+                # so callers don't have to dig into raw for the common case.
+                text: str | None = None
+                if event_type == "message.part.delta" and props.get("field") == "text":
+                    text = props.get("delta") or None
+                elif event_type == "message.part.updated":
+                    part = props.get("part") or {}
+                    if isinstance(part, dict) and part.get("type") == "text":
+                        text = part.get("text") or None
 
-                    # Suppress internal bus noise — never useful to callers.
-                    if event_type == "sync":
-                        continue
+                yield OpenCodeEvent(type=event_type, text=text, raw=payload)
 
-                    props = payload.get("properties", {})
-                    if not isinstance(props, dict):
-                        props = {}
-
-                    # Filter to this session (events without sessionID are global, pass through)
-                    sid = props.get("sessionID")
-                    if sid is not None and sid != session_id:
-                        continue
-
-                    # Derive a convenience text field where it naturally exists,
-                    # so callers don't have to dig into raw for the common case.
-                    text: str | None = None
-                    if event_type == "message.part.delta" and props.get("field") == "text":
-                        text = props.get("delta") or None
-                    elif event_type == "message.part.updated":
-                        part = props.get("part") or {}
-                        if isinstance(part, dict) and part.get("type") == "text":
-                            text = part.get("text") or None
-
-                    yield OpenCodeEvent(type=event_type, text=text, raw=payload)
-
-                    # Terminal events — stop iterating after yielding.
-                    if event_type == "session.idle":
-                        return
-                    if event_type == "session.error":
-                        return
+                # Terminal events — stop iterating after yielding.
+                if event_type == "session.idle":
+                    return
+                if event_type == "session.error":
+                    return

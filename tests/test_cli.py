@@ -14,10 +14,9 @@ import time
 
 import pytest
 
-import opencode_runtime.registry as registry
+from opencode_runtime import process, registry
 from opencode_runtime.cli import cmd_health, cmd_ps, cmd_serve, cmd_stop, cmd_stop_all
-from opencode_runtime.registry import RegistryEntry, ServerState
-
+from opencode_runtime.registry import RegistryEntry
 
 # ---------------------------------------------------------------------------
 # fixtures
@@ -36,19 +35,17 @@ def ns(**kwargs: object) -> argparse.Namespace:
 
 
 def make_entry(**kwargs: object) -> RegistryEntry:
-    defaults: dict[str, object] = dict(
-        key="abc123def456abcd",
-        state=ServerState.RUNNING,
-        pid=os.getpid(),  # alive by default
-        port=54321,
-        password="secret",
-        project_dir="/tmp/project",
-        server_dir=None,
-        started_at="2026-07-05T00:00:00+00:00",
-        claimed_at="2026-07-05T00:00:00+00:00",
-        workspace=None,
-        user_id=None,
-    )
+    defaults: dict[str, object] = {
+        "key": "abc123def456abcd",
+        "pid": os.getpid(),  # alive by default
+        "port": 54321,
+        "password": "secret",
+        "project_dir": "/tmp/project",
+        "server_dir": None,
+        "started_at": "2026-07-05T00:00:00+00:00",
+        "workspace": None,
+        "user_id": None,
+    }
     defaults.update(kwargs)
     return RegistryEntry(**defaults)  # type: ignore[arg-type]
 
@@ -118,10 +115,11 @@ def test_stop_dead_process_warns_and_deletes(capsys):
 
 
 def test_stop_starting_entry_is_removed(capsys):
-    """A STARTING entry (e.g. an orphaned claim) must be stoppable by key,
-    not just RUNNING ones — cmd_stop used to look it up via find(), which
-    filters to RUNNING and reported STARTING entries as "not found"."""
-    registry.write(make_entry(state=ServerState.STARTING, pid=None))
+    """A claim entry (pid still None, e.g. an orphaned claim) must be
+    stoppable by key, not just entries with a pid — cmd_stop used to look
+    it up via find(), which filters to entries with a pid and reported
+    claims as "not found"."""
+    registry.write(make_entry(pid=None))
     cmd_stop(ns(key="abc123def456abcd"))
     out = capsys.readouterr().out
     assert "Server stopped" in out
@@ -135,7 +133,7 @@ def _is_truly_dead(pid: int) -> bool:
     exists in the process table but the process has already exited. We treat
     zombies as dead since we are not the parent and cannot reap them.
     """
-    if not registry.is_alive(pid):
+    if not process.is_alive(pid):
         return True
     try:
         with open(f"/proc/{pid}/status") as f:
@@ -161,7 +159,7 @@ def test_stop_live_server(tmp_path):
     entries = registry.list_all()
     assert len(entries) == 1
     entry = entries[0]
-    assert registry.is_alive(entry.pid)
+    assert process.is_alive(entry.pid)
 
     cmd_stop(ns(key=entry.key))
 
@@ -251,7 +249,7 @@ def test_serve_starts_server(tmp_path):
 
     entries = registry.list_all()
     assert len(entries) == 1
-    assert registry.is_alive(entries[0].pid)
+    assert process.is_alive(entries[0].pid)
 
     # cleanup
     cmd_stop(ns(key=entries[0].key))
@@ -278,8 +276,9 @@ def test_serve_duplicate_key_exits(tmp_path):
 
 def test_serve_stale_entry_cleaned_and_restarted(tmp_path):
     """Dead PID in registry — serve should clean it up and start fresh."""
-    from opencode_runtime.server import _compute_runtime_key
     from pathlib import Path
+
+    from opencode_runtime.server import _compute_runtime_key
 
     # Compute the same key serve will use
     key = _compute_runtime_key(
@@ -298,7 +297,7 @@ def test_serve_stale_entry_cleaned_and_restarted(tmp_path):
 
     entries = registry.list_all()
     assert len(entries) == 1
-    assert registry.is_alive(entries[0].pid)
+    assert process.is_alive(entries[0].pid)
 
     # cleanup
     cmd_stop(ns(key=entries[0].key))
