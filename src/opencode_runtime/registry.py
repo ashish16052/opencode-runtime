@@ -1,49 +1,51 @@
 """
 Registry for tracking OpenCode instance processes.
 
-Every running instance is a row in a SQLite database at:
-    ~/.opencode-runtime/servers/registry.db
+Every running instance is one file at:
+    ~/.opencode-runtime/servers/<key>.json
 
 Used by both the CLI (opencode-runtime serve/ps/stop) and the library
 (OpenCodeRuntime) — the registry is the shared source of truth for all
 running instances regardless of how they were started.
+
+This module only persists and locks JSON state. It has no opinion on
+whether a pid is actually alive (see process.py) or whether OpenCode is
+healthy (see server.py).
 """
 
 from __future__ import annotations
 
+import json
 import os
-import sqlite3
+import time
+import uuid
 from contextlib import contextmanager
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, fields
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Generator
 
-from .schema import SCHEMA, SCHEMA_VERSION, migrate
+from .exceptions import RegistryBusyError
 
 REGISTRY_DIR = Path(
     os.environ.get("OPENCODE_RUNTIME_REGISTRY_DIR")
     or (Path.home() / ".opencode-runtime" / "servers")
 )
 
-# A 'starting' row older than this is treated as abandoned (its starter
-# crashed — SIGKILL, host reboot — before reaching write()/delete()) and is
-# reclaimed by the next claim_starting() call. Comfortably above
-# _wait_healthy's default 60s startup timeout, so a claim only expires once
-# a start attempt has definitely either finished or died without cleaning
-# up after itself.
+# A claim (pid still None) older than this is treated as abandoned — its
+# starter crashed (SIGKILL, host reboot) before finishing _start(). Comfortably
+# above _wait_healthy's default 60s startup timeout.
 _START_LEASE_SECONDS = 90
+
+# A lock file older than this is treated as abandoned — its holder crashed
+# mid read-check-write. Locks here are only ever held across a handful of
+# filesystem syscalls, so a few seconds of staleness tolerance is generous.
+_LOCK_STALE_SECONDS = 5
 
 
 class ServerState(str, Enum):
-    """Server lifecycle state.
-
-    STARTING: claimed startup slot, awaiting health check.
-    RUNNING: process alive, health check passing.
-    STOPPING: shutdown initiated (reserved for future use).
-    FAILED: startup failed or lease expired (reserved for future use).
-    """
+    """Server lifecycle state (kept for server.py compatibility)."""
 
     STARTING = "starting"
     RUNNING = "running"
@@ -55,7 +57,11 @@ class ServerState(str, Enum):
 class RegistryEntry:
     """A server entry in the registry.
 
-    state: ServerState enum value. Display status is derived from state + observed health.
+    pid is None while the key is claimed but the process hasn't been
+    spawned yet. instance_id identifies this process generation, so a
+    delete can be scoped to "this generation only" via delete_if_instance().
+    pid_start_time guards against pid having been reused by an unrelated
+    process — see process.is_same().
     """
 
     key: str
@@ -71,111 +77,117 @@ class RegistryEntry:
     user_id: str | None = None
     last_used_at: str | None = None
     runtime_version: str | None = None
+    instance_id: str | None = None
+    pid_start_time: str | None = None
 
 
-_INSERT = """
-INSERT INTO servers (key, state, pid, port, password, project_dir, server_dir,
-                     started_at, claimed_at, workspace, user_id, last_used_at,
-                     runtime_version)
-VALUES (:key, :state, :pid, :port, :password, :project_dir, :server_dir,
-        :started_at, :claimed_at, :workspace, :user_id, :last_used_at,
-        :runtime_version)
-"""
+_FIELD_NAMES = {f.name for f in fields(RegistryEntry)}
 
-_UPSERT = _INSERT.replace("INSERT", "INSERT OR REPLACE", 1)
+
+def _path(key: str) -> Path:
+    return REGISTRY_DIR / f"{key}.json"
+
+
+def _deserialize(text: str) -> RegistryEntry:
+    data = json.loads(text)
+    return RegistryEntry(**{k: v for k, v in data.items() if k in _FIELD_NAMES})
 
 
 @contextmanager
-def _connect() -> Generator[sqlite3.Connection, None, None]:
-    """Open the registry database, creating it on first use.
+def _locked(key: str, wait_seconds: float = 1.0) -> Generator[None, None, None]:
+    """Hold a short-lived exclusive lock on key for a read-check-write step.
 
-    Commits on clean exit, rolls back if the body raises. The 5s timeout is
-    SQLite's busy timeout — concurrent writers wait for each other instead
-    of failing immediately.
+    Legitimate holders never keep this past a few syscalls, so genuine
+    contention clears in milliseconds — wait_seconds is generous headroom,
+    not a real operation budget.
     """
     REGISTRY_DIR.mkdir(parents=True, exist_ok=True)
-    db_path = REGISTRY_DIR / "registry.db"
-    is_new = not db_path.exists()
-    conn = sqlite3.connect(db_path, timeout=5.0)
+    lock_path = REGISTRY_DIR / f"{key}.lock"
+    deadline = time.monotonic() + wait_seconds
+    while True:
+        try:
+            os.close(os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
+            break
+        except FileExistsError:
+            pass
+        try:
+            stale = time.time() - lock_path.stat().st_mtime > _LOCK_STALE_SECONDS
+        except FileNotFoundError:
+            stale = False
+        if stale:
+            lock_path.unlink(missing_ok=True)  # holder crashed; reclaim
+            continue
+        if time.monotonic() >= deadline:
+            raise RegistryBusyError(f"registry entry {key!r} is locked by another operation")
+        time.sleep(0.01)
     try:
-        conn.row_factory = sqlite3.Row
-        conn.execute(SCHEMA)
-        if is_new:
-            db_path.chmod(0o600)  # entries hold server passwords
-            conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
-        else:
-            current_version = conn.execute("PRAGMA user_version").fetchone()[0]
-            if current_version != SCHEMA_VERSION:
-                migrate(conn, current_version)
-        yield conn
-        conn.commit()
+        yield
     finally:
-        conn.close()
-
-
-def _entry(row: sqlite3.Row) -> RegistryEntry:
-    # Column names match RegistryEntry field names one-to-one.
-    return RegistryEntry(**{name: row[name] for name in row.keys()})
+        lock_path.unlink(missing_ok=True)
 
 
 def write(entry: RegistryEntry) -> None:
     """Write (insert or replace) a registry entry."""
-    with _connect() as conn:
-        conn.execute(_UPSERT, asdict(entry))
+    REGISTRY_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = REGISTRY_DIR / f".{entry.key}.{uuid.uuid4().hex}.tmp"
+    tmp.write_text(json.dumps(asdict(entry)), encoding="utf-8")
+    tmp.chmod(0o600)
+    os.replace(tmp, _path(entry.key))  # atomic — readers never see a partial write
 
 
 def read(key: str) -> RegistryEntry | None:
     """Read a registry entry by key. Returns None if not found."""
-    with _connect() as conn:
-        row = conn.execute("SELECT * FROM servers WHERE key = ?", (key,)).fetchone()
-    return _entry(row) if row is not None else None
+    try:
+        return _deserialize(_path(key).read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
 
 
 def delete(key: str) -> None:
     """Remove a registry entry. No-op if not found."""
-    with _connect() as conn:
-        conn.execute("DELETE FROM servers WHERE key = ?", (key,))
+    _path(key).unlink(missing_ok=True)
 
 
 def list_all() -> list[RegistryEntry]:
     """Return all registry entries."""
-    with _connect() as conn:
-        rows = conn.execute("SELECT * FROM servers").fetchall()
-    return [_entry(row) for row in rows]
+    if not REGISTRY_DIR.exists():
+        return []
+    entries = []
+    for path in REGISTRY_DIR.glob("*.json"):
+        try:
+            entries.append(_deserialize(path.read_text(encoding="utf-8")))
+        except (FileNotFoundError, json.JSONDecodeError):
+            continue  # deleted mid-scan, or a crash left a partial write
+    return entries
 
 
 def claim_starting(entry: RegistryEntry) -> bool:
-    """Atomically insert a 'starting' row for entry.key.
+    """Claim entry.key for a new start attempt.
 
-    Returns True if this call claimed the key, False if a row for the key
-    already exists (a live 'starting' claim or a 'ready' server). A
-    'starting' row older than _START_LEASE_SECONDS is treated as abandoned
-    and reclaimed within the same transaction.
+    Returns True if this call claimed the key, False if a live claim or a
+    running server already occupies it. A claim (pid still None) older
+    than _START_LEASE_SECONDS is treated as abandoned and reclaimed.
     """
-    cutoff = (datetime.now(timezone.utc) - timedelta(seconds=_START_LEASE_SECONDS)).isoformat(
-        timespec="microseconds"
-    )
-    try:
-        with _connect() as conn:
-            conn.execute(
-                "DELETE FROM servers WHERE key = ? AND state = ? AND claimed_at < ?",
-                (entry.key, ServerState.STARTING.value, cutoff),
-            )
-            conn.execute(_INSERT, asdict(entry))
+    with _locked(entry.key):
+        existing = read(entry.key)
+        if existing is not None:
+            if existing.pid is not None:
+                return False
+            claimed_at = datetime.fromisoformat(existing.claimed_at)
+            if datetime.now(timezone.utc) - claimed_at < timedelta(seconds=_START_LEASE_SECONDS):
+                return False
+        write(entry)
         return True
-    except sqlite3.IntegrityError:  # PRIMARY KEY conflict — someone else holds the key
-        return False
 
 
-def is_alive(pid: int | None) -> bool:
-    """Return True if pid is set and a process with it is running."""
-    if pid is None:
-        return False
-    try:
-        os.kill(pid, 0)
+def delete_if_instance(key: str, instance_id: str | None) -> bool:
+    """Delete the entry for key iff its instance_id matches. Returns whether deleted."""
+    with _locked(key):
+        entry = read(key)
+        if entry is None or entry.instance_id != instance_id:
+            return False
+        delete(key)
         return True
-    except (ProcessLookupError, PermissionError):
-        return False
 
 
 def now_iso() -> str:

@@ -15,6 +15,7 @@ import time
 import pytest
 
 import opencode_runtime.registry as registry
+from opencode_runtime import process
 from opencode_runtime.cli import cmd_health, cmd_ps, cmd_serve, cmd_stop, cmd_stop_all
 from opencode_runtime.registry import RegistryEntry, ServerState
 
@@ -118,9 +119,10 @@ def test_stop_dead_process_warns_and_deletes(capsys):
 
 
 def test_stop_starting_entry_is_removed(capsys):
-    """A STARTING entry (e.g. an orphaned claim) must be stoppable by key,
-    not just RUNNING ones — cmd_stop used to look it up via find(), which
-    filters to RUNNING and reported STARTING entries as "not found"."""
+    """A claim entry (pid still None, e.g. an orphaned claim) must be
+    stoppable by key, not just entries with a pid — cmd_stop used to look
+    it up via find(), which filters to entries with a pid and reported
+    claims as "not found"."""
     registry.write(make_entry(state=ServerState.STARTING, pid=None))
     cmd_stop(ns(key="abc123def456abcd"))
     out = capsys.readouterr().out
@@ -135,7 +137,7 @@ def _is_truly_dead(pid: int) -> bool:
     exists in the process table but the process has already exited. We treat
     zombies as dead since we are not the parent and cannot reap them.
     """
-    if not registry.is_alive(pid):
+    if not process.is_alive(pid):
         return True
     try:
         with open(f"/proc/{pid}/status") as f:
@@ -161,7 +163,7 @@ def test_stop_live_server(tmp_path):
     entries = registry.list_all()
     assert len(entries) == 1
     entry = entries[0]
-    assert registry.is_alive(entry.pid)
+    assert process.is_alive(entry.pid)
 
     cmd_stop(ns(key=entry.key))
 
@@ -251,7 +253,7 @@ def test_serve_starts_server(tmp_path):
 
     entries = registry.list_all()
     assert len(entries) == 1
-    assert registry.is_alive(entries[0].pid)
+    assert process.is_alive(entries[0].pid)
 
     # cleanup
     cmd_stop(ns(key=entries[0].key))
@@ -298,7 +300,7 @@ def test_serve_stale_entry_cleaned_and_restarted(tmp_path):
 
     entries = registry.list_all()
     assert len(entries) == 1
-    assert registry.is_alive(entries[0].pid)
+    assert process.is_alive(entries[0].pid)
 
     # cleanup
     cmd_stop(ns(key=entries[0].key))

@@ -15,6 +15,7 @@ import secrets
 import shutil
 import signal
 import socket
+import uuid
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -303,22 +304,25 @@ class ServerManager:
         if entry is None:
             return False
 
+        async def forget() -> None:
+            await asyncio.to_thread(registry.delete_if_instance, key, entry.instance_id)
+
         if not process.is_alive(entry.pid):
-            registry.delete(key)
+            await forget()
             return False
 
         assert entry.pid is not None
         if not process.kill_group(entry.pid, signal.SIGTERM):
-            registry.delete(key)
+            await forget()
             return False
 
-        if await process.wait_until_dead(entry.pid, None, timeout=5.0):
-            registry.delete(key)
+        if await process.wait_until_dead(entry.pid, entry.pid_start_time, timeout=5.0):
+            await forget()
             return True
 
         process.kill_group(entry.pid, signal.SIGKILL)
-        if await process.wait_until_dead(entry.pid, None, timeout=2.0):
-            registry.delete(key)
+        if await process.wait_until_dead(entry.pid, entry.pid_start_time, timeout=2.0):
+            await forget()
             return True
 
         return False
@@ -355,14 +359,16 @@ class ServerManager:
         if entry is not None and entry.state == ServerState.RUNNING:
             if process.is_alive(entry.pid):
                 return self._attach(entry)
-            # Stale — the process died after finishing startup.
-            registry.delete(key)
+            # Stale — the process died after finishing startup. Scoped to
+            # this generation so a concurrent fresh claim isn't clobbered.
+            registry.delete_if_instance(key, entry.instance_id)
 
-        # port/password are generated here (not inside _start) because a
-        # 'starting' claim row needs both up front — pid is the only field
+        # port/password/instance_id are generated here (not inside _start)
+        # because a claim needs them all up front — pid is the only field
         # that isn't known until the subprocess actually exists.
         port = _find_free_port()
         password = secrets.token_urlsafe(32)
+        instance_id = uuid.uuid4().hex
         timestamp = registry.now_iso()
 
         claimed = registry.claim_starting(
@@ -378,6 +384,7 @@ class ServerManager:
                 claimed_at=timestamp,
                 workspace=workspace,
                 user_id=user_id,
+                instance_id=instance_id,
             )
         )
         if not claimed:
@@ -395,11 +402,13 @@ class ServerManager:
                 env=env,
                 port=port,
                 password=password,
+                instance_id=instance_id,
+                started_at=timestamp,
                 workspace=workspace,
                 user_id=user_id,
             )
         except Exception:
-            registry.delete(key)
+            registry.delete_if_instance(key, instance_id)
             raise
         self._owned.add(key)
         return server
@@ -444,6 +453,8 @@ class ServerManager:
         env: dict[str, str],
         port: int,
         password: str,
+        instance_id: str,
+        started_at: str,
         workspace: str | None = None,
         user_id: str | None = None,
     ) -> _ManagedServer:
@@ -498,7 +509,6 @@ class ServerManager:
             await process.terminate(proc)
             raise
 
-        timestamp = registry.now_iso()
         registry.write(
             RegistryEntry(
                 key=key,
@@ -508,12 +518,14 @@ class ServerManager:
                 password=password,
                 project_dir=str(project_dir),
                 server_dir=str(server_dir) if server_dir else None,
-                started_at=timestamp,
-                claimed_at=timestamp,
-                last_used_at=timestamp,
+                started_at=started_at,
+                claimed_at=started_at,
+                last_used_at=started_at,
                 runtime_version=version("opencode-runtime"),
                 workspace=workspace,
                 user_id=user_id,
+                instance_id=instance_id,
+                pid_start_time=process.start_time(proc.pid),
             )
         )
 

@@ -1,13 +1,16 @@
 """Tests for the registry module."""
 
 import asyncio
+import json
 import os
 import stat
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
 import opencode_runtime.registry as registry
+from opencode_runtime.exceptions import RegistryBusyError
 from opencode_runtime.registry import RegistryEntry, ServerState
 
 pytestmark = pytest.mark.asyncio
@@ -36,13 +39,17 @@ def make_entry(**kwargs: object) -> RegistryEntry:
 
 
 def make_claim(**kwargs: object) -> RegistryEntry:
-    """A 'starting' entry, as claim_starting() expects — pid is unknown yet.
+    """A claim entry, as claim_starting() expects — pid is unknown yet.
 
-    claimed_at defaults to now (not make_entry()'s fixed placeholder date),
+    started_at/claimed_at default to now (not make_entry()'s fixed placeholder date),
     since claim_starting()'s lease check compares it against the real clock.
     """
+    now = registry.now_iso()
     defaults: dict[str, object] = dict(
-        pid=None, state=ServerState.STARTING, claimed_at=registry.now_iso()
+        state=ServerState.STARTING,
+        pid=None,
+        started_at=now,
+        claimed_at=now,
     )
     defaults.update(kwargs)
     return make_entry(**defaults)
@@ -84,13 +91,12 @@ async def test_write_twice_replaces_entry():
 
 
 async def test_write_with_null_pid():
-    """A 'starting' row has no pid yet."""
-    entry = make_entry(state=ServerState.STARTING, pid=None)
+    """A claim entry has no pid yet."""
+    entry = make_entry(pid=None)
     registry.write(entry)
     result = registry.read(entry.key)
     assert result is not None
     assert result.pid is None
-    assert result.state == ServerState.STARTING
 
 
 # ---------------------------------------------------------------------------
@@ -129,7 +135,6 @@ async def test_delete_is_noop_for_missing_key():
 
 
 async def test_list_all_empty_when_no_registry_dir():
-    # No db file created yet
     assert registry.list_all() == []
 
 
@@ -147,11 +152,12 @@ async def test_list_all_returns_all_entries():
 # ---------------------------------------------------------------------------
 
 
-async def test_db_file_created_with_permissions_600():
-    registry.write(make_entry())
-    db_path = registry.REGISTRY_DIR / "registry.db"
-    assert db_path.exists()
-    mode = stat.S_IMODE(db_path.stat().st_mode)
+async def test_entry_file_created_with_permissions_600():
+    entry = make_entry()
+    registry.write(entry)
+    path = registry.REGISTRY_DIR / f"{entry.key}.json"
+    assert path.exists()
+    mode = stat.S_IMODE(path.stat().st_mode)
     assert mode == 0o600
 
 
@@ -165,7 +171,6 @@ async def test_claim_starting_succeeds_for_new_key():
     assert registry.claim_starting(entry) is True
     result = registry.read(entry.key)
     assert result is not None
-    assert result.state == ServerState.STARTING
     assert result.pid is None
 
 
@@ -211,29 +216,96 @@ async def test_claim_starting_does_not_reclaim_before_lease_expires():
     assert registry.claim_starting(make_claim(port=55555)) is False
 
 
-async def test_claim_starting_does_not_reclaim_ready_row():
-    """A live 'running' row isn't touched by claim_starting's lease logic."""
-    entry = make_entry()  # state=ServerState.RUNNING
+async def test_claim_starting_does_not_reclaim_entry_with_pid():
+    """An entry that already has a pid isn't touched by the lease logic,
+    no matter how old its started_at is."""
+    entry = make_entry()  # has a pid
     registry.write(entry)
     assert registry.claim_starting(make_claim(port=55555)) is False
     result = registry.read(entry.key)
     assert result is not None
-    assert result.state == ServerState.RUNNING
+    assert result.pid == entry.pid
     assert result.port == entry.port
 
 
 # ---------------------------------------------------------------------------
-# is_alive
+# delete_if_instance
 # ---------------------------------------------------------------------------
 
 
-async def test_is_alive_current_process():
-    assert registry.is_alive(os.getpid()) is True
+async def test_delete_if_instance_deletes_on_match():
+    entry = make_entry(instance_id="gen-1")
+    registry.write(entry)
+    assert registry.delete_if_instance(entry.key, "gen-1") is True
+    assert registry.read(entry.key) is None
 
 
-async def test_is_alive_dead_pid():
-    assert registry.is_alive(99999999) is False
+async def test_delete_if_instance_leaves_mismatched_generation():
+    entry = make_entry(instance_id="gen-2")
+    registry.write(entry)
+    assert registry.delete_if_instance(entry.key, "gen-1") is False
+    assert registry.read(entry.key) is not None
 
 
-async def test_is_alive_none_pid():
-    assert registry.is_alive(None) is False
+async def test_delete_if_instance_false_for_missing_key():
+    assert registry.delete_if_instance("doesnotexist", "gen-1") is False
+
+
+async def test_delete_if_instance_reclaims_stale_lock():
+    """A lock file left behind by a crashed holder doesn't wedge the registry."""
+    entry = make_entry(instance_id="gen-1")
+    registry.write(entry)
+    lock_path = registry.REGISTRY_DIR / f"{entry.key}.lock"
+    lock_path.write_text("", encoding="utf-8")
+    stale = time.time() - registry._LOCK_STALE_SECONDS - 1
+    os.utime(lock_path, (stale, stale))
+
+    assert registry.delete_if_instance(entry.key, "gen-1") is True
+    assert registry.read(entry.key) is None
+
+
+async def test_delete_if_instance_raises_when_genuinely_locked():
+    entry = make_entry(instance_id="gen-1")
+    registry.write(entry)
+    lock_path = registry.REGISTRY_DIR / f"{entry.key}.lock"
+    lock_path.write_text("", encoding="utf-8")
+
+    with pytest.raises(RegistryBusyError):
+        registry.delete_if_instance(entry.key, "gen-1")
+
+
+# ---------------------------------------------------------------------------
+# forward/backward compatibility
+# ---------------------------------------------------------------------------
+
+
+async def test_read_tolerates_unknown_fields():
+    """A file written by a newer version can carry fields this version
+    doesn't know about — they should be ignored, not raise."""
+    entry = make_entry()
+    registry.write(entry)
+    path = registry.REGISTRY_DIR / f"{entry.key}.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["from_a_future_version"] = "whatever"
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+    result = registry.read(entry.key)
+    assert result is not None
+    assert result.key == entry.key
+
+
+async def test_read_defaults_fields_missing_from_older_writer():
+    """A file written before instance_id/pid_start_time existed should load
+    fine, with those fields defaulting to None."""
+    entry = make_entry()
+    registry.write(entry)
+    path = registry.REGISTRY_DIR / f"{entry.key}.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    del data["instance_id"]
+    del data["pid_start_time"]
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+    result = registry.read(entry.key)
+    assert result is not None
+    assert result.instance_id is None
+    assert result.pid_start_time is None

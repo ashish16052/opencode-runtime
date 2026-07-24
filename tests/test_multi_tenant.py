@@ -11,7 +11,7 @@ No model or agent calls — no API keys required.
 import pytest
 
 import opencode_runtime.registry as registry
-from opencode_runtime import OpenCodeRuntime
+from opencode_runtime import OpenCodeRuntime, process
 
 pytestmark = pytest.mark.asyncio
 
@@ -104,6 +104,6 @@ class TestStopBehaviour:
             await r._server_manager.stop(acme_key)
 
             assert registry.read(acme_key) is None
-            assert not registry.is_alive(acme_entry.pid)
+            assert not process.is_alive(acme_entry.pid)
             assert registry.read(beta_key) is not None
-            assert registry.is_alive(beta_entry.pid)
+            assert process.is_alive(beta_entry.pid)
