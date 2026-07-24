@@ -107,12 +107,11 @@ async def _serve(args: argparse.Namespace) -> None:
     manager = ServerManager()
 
     existing = manager.find(key)
-    if existing is not None:
-        if manager.is_alive(key):
-            sys.exit(
-                _yellow(f"● Server already running  id={existing.key}  pid={existing.pid}\n")
-                + _dim(f"  use: opencode-runtime stop {existing.key}")
-            )
+    if existing is not None and manager.is_alive(key):
+        sys.exit(
+            _yellow(f"● Server already running  id={existing.key}  pid={existing.pid}\n")
+            + _dim(f"  use: opencode-runtime stop {existing.key}")
+        )
 
     server_dir: Path | None = None
     if runtime_dir is not None:
@@ -196,7 +195,7 @@ def cmd_ps(_args: argparse.Namespace) -> None:
                 uptime_str = f"{uptime_secs // 60}m"
             else:
                 uptime_str = f"{uptime_secs // 3600}h"
-        except Exception:
+        except Exception:  # noqa: BLE001 — malformed timestamp, unknown format
             uptime_str = "?"
 
         vals = [e.key, str(e.pid), str(e.port), status_plain, uptime_str]
@@ -268,7 +267,7 @@ def cmd_health(args: argparse.Namespace) -> None:
             claimed = datetime.fromisoformat(entry.started_at)
             age_secs = int((datetime.now(timezone.utc) - claimed).total_seconds())
             sys.exit(_yellow(f"◐ starting: claimed {age_secs}s ago, health check pending"))
-        except Exception:
+        except Exception:  # noqa: BLE001 — malformed timestamp, unknown format
             sys.exit(_yellow("◐ starting: awaiting health check"))
     elif st.status == RuntimeStatus.RUNNING:
         try:
@@ -279,7 +278,7 @@ def cmd_health(args: argparse.Namespace) -> None:
                 + f"   {_dim(f'version {version}')}"
                 + f"   {_dim(f'http://127.0.0.1:{entry.port}')}"
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — network error, timeout, etc.
             sys.exit(_red(f"✗ unhealthy: /global/health failed: {exc}"))
     elif st.status == RuntimeStatus.UNHEALTHY:
         sys.exit(
@@ -312,7 +311,7 @@ def cmd_inspect(args: argparse.Namespace) -> None:
             uptime = f"{uptime_secs // 60}m {uptime_secs % 60}s"
         else:
             uptime = f"{uptime_secs // 3600}h {(uptime_secs % 3600) // 60}m"
-    except Exception:
+    except Exception:  # noqa: BLE001 — malformed timestamp, unknown format
         uptime = "?"
 
     print()

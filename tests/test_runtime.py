@@ -8,8 +8,7 @@ No model or agent calls — no API keys required.
 
 import pytest
 
-import opencode_runtime.registry as registry
-from opencode_runtime import OpenCodeRuntime, process
+from opencode_runtime import OpenCodeRuntime, process, registry
 
 pytestmark = pytest.mark.asyncio
 
