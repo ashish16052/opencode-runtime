@@ -221,13 +221,6 @@ class ServerManager:
         entry = self.find(key)
         return entry is not None and process.is_alive(entry.pid)
 
-    def touch(self, key: str) -> None:
-        """Update last_used_at timestamp for a server. Call after session creation."""
-        entry = registry.read(key)
-        if entry is not None and entry.state == ServerState.RUNNING:
-            entry.last_used_at = registry.now_iso()
-            registry.write(entry)
-
     async def _status_for_entry(
         self, entry: RegistryEntry, *, health_timeout: float = 3.0
     ) -> ServerStatus:
@@ -520,7 +513,6 @@ class ServerManager:
                 server_dir=str(server_dir) if server_dir else None,
                 started_at=started_at,
                 claimed_at=started_at,
-                last_used_at=started_at,
                 runtime_version=version("opencode-runtime"),
                 workspace=workspace,
                 user_id=user_id,

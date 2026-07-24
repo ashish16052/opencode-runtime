@@ -59,20 +59,6 @@ def _home(path: str) -> str:
         return path
 
 
-def _uptime(started_at: str, alive: bool) -> str:
-    try:
-        mins = max(
-            0,
-            int(
-                (datetime.now(timezone.utc) - datetime.fromisoformat(started_at)).total_seconds()
-                // 60
-            ),
-        )
-    except Exception:
-        return "?"
-    return f"Up {mins}m" if alive else f"Dead {mins}m"
-
-
 def _row(label: str, value: str) -> None:
     print(f"  {_cyan(f'{label:<9}')}  {value}")
 
@@ -334,22 +320,6 @@ def cmd_inspect(args: argparse.Namespace) -> None:
     except Exception:
         uptime = "?"
 
-    # Compute idle time (time since last use)
-    if entry.last_used_at:
-        try:
-            last_used = datetime.fromisoformat(entry.last_used_at)
-            idle_secs = int((datetime.now(timezone.utc) - last_used).total_seconds())
-            if idle_secs < 60:
-                idle = f"{idle_secs}s ago"
-            elif idle_secs < 3600:
-                idle = f"{idle_secs // 60}m ago"
-            else:
-                idle = f"{idle_secs // 3600}h ago"
-        except Exception:
-            idle = "?"
-    else:
-        idle = "-"
-
     print()
     _row("ID", entry.key)
     _row("Status", _status_display(st.display))
@@ -361,7 +331,6 @@ def cmd_inspect(args: argparse.Namespace) -> None:
     _row("PID", _dim(str(entry.pid)) if entry.pid else _dim("(none)"))
     _row("Port", _dim(str(entry.port)))
     _row("Uptime", uptime)
-    _row("Last used", idle)
     if entry.runtime_version:
         _row("Runtime", entry.runtime_version)
     if entry.server_dir:

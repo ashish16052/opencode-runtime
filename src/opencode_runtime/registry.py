@@ -75,7 +75,6 @@ class RegistryEntry:
     claimed_at: str  # ISO-8601; only meaningful while state == "starting"
     workspace: str | None = None
     user_id: str | None = None
-    last_used_at: str | None = None
     runtime_version: str | None = None
     instance_id: str | None = None
     pid_start_time: str | None = None
