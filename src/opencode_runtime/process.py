@@ -97,10 +97,18 @@ async def terminate(process: asyncio.subprocess.Process) -> None:
 
 
 async def wait_until_dead(pid: int, started_at: float | None, timeout: float) -> bool:
-    """Poll until pid is confirmed gone, or timeout elapses."""
-    deadline = asyncio.get_event_loop().time() + timeout
-    while asyncio.get_event_loop().time() < deadline:
-        if not await asyncio.to_thread(is_same, pid, started_at):
-            return True
-        await asyncio.sleep(0.1)
-    return not is_same(pid, started_at)
+    """Wait until pid is confirmed gone, or timeout elapses.
+
+    Uses psutil.wait_procs() for efficient OS-level waiting instead of a
+    polling loop. Returns True if the process is gone within timeout.
+    """
+    try:
+        p = psutil.Process(pid)
+        # Verify we have the right generation before waiting.
+        if started_at is not None and p.create_time() != started_at:
+            return True  # already a different process — original is gone
+    except psutil.NoSuchProcess:
+        return True  # already gone
+
+    gone, _ = await asyncio.to_thread(psutil.wait_procs, [p], timeout=timeout)
+    return len(gone) > 0
