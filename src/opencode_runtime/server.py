@@ -82,7 +82,7 @@ async def _is_health_ok(client: OpenCodeClient, timeout: float = 3.0) -> bool:
     try:
         await asyncio.wait_for(client.health(), timeout=timeout)
         return True
-    except Exception:
+    except Exception:  # noqa: BLE001 — any network/timeout/parse error means unhealthy
         return False
 
 
@@ -108,7 +108,7 @@ async def _wait_healthy(
         try:
             await client.health()
             return
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — any network/timeout/parse error while polling
             last_exc = exc
             await asyncio.sleep(1.0)
 
@@ -443,7 +443,7 @@ class ServerManager:
             process_env["HOME"] = str(server_dir)
             process_env["TMPDIR"] = str(server_dir / "tmp")
             process_env["OPENCODE_CONFIG"] = str(server_dir / "opencode.json")
-            output: Any = open(server_dir / "opencode.log", "ab")
+            output: Any = open(server_dir / "opencode.log", "ab")  # noqa: ASYNC230, SIM115
         else:
             output = asyncio.subprocess.DEVNULL
 

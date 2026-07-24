@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-import opencode_runtime.registry as registry
+from opencode_runtime import registry
 from opencode_runtime.exceptions import RegistryBusyError
 from opencode_runtime.registry import RegistryEntry
 
@@ -23,15 +23,15 @@ def isolated_registry(tmp_path, monkeypatch):
 
 
 def make_entry(**kwargs: object) -> RegistryEntry:
-    defaults: dict[str, object] = dict(
-        key="abc123def456abcd",
-        pid=99999,
-        port=54321,
-        password="secret",
-        project_dir="/tmp/project",
-        server_dir=None,
-        started_at="2026-07-05T00:00:00+00:00",
-    )
+    defaults: dict[str, object] = {
+        "key": "abc123def456abcd",
+        "pid": 99999,
+        "port": 54321,
+        "password": "secret",
+        "project_dir": "/tmp/project",
+        "server_dir": None,
+        "started_at": "2026-07-05T00:00:00+00:00",
+    }
     defaults.update(kwargs)
     return RegistryEntry(**defaults)  # type: ignore[arg-type]
 
@@ -42,7 +42,7 @@ def make_claim(**kwargs: object) -> RegistryEntry:
     started_at defaults to now (not make_entry()'s fixed placeholder date),
     since claim_starting()'s lease check compares it against the real clock.
     """
-    defaults: dict[str, object] = dict(pid=None, started_at=registry.now_iso())
+    defaults: dict[str, object] = {"pid": None, "started_at": registry.now_iso()}
     defaults.update(kwargs)
     return make_entry(**defaults)
 

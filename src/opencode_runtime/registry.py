@@ -19,11 +19,11 @@ import json
 import os
 import time
 import uuid
+from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, fields
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Generator
 
 from .exceptions import RegistryBusyError
 

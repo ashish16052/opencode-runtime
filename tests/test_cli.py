@@ -14,11 +14,9 @@ import time
 
 import pytest
 
-import opencode_runtime.registry as registry
-from opencode_runtime import process
+from opencode_runtime import process, registry
 from opencode_runtime.cli import cmd_health, cmd_ps, cmd_serve, cmd_stop, cmd_stop_all
 from opencode_runtime.registry import RegistryEntry
-
 
 # ---------------------------------------------------------------------------
 # fixtures
@@ -37,17 +35,17 @@ def ns(**kwargs: object) -> argparse.Namespace:
 
 
 def make_entry(**kwargs: object) -> RegistryEntry:
-    defaults: dict[str, object] = dict(
-        key="abc123def456abcd",
-        pid=os.getpid(),  # alive by default
-        port=54321,
-        password="secret",
-        project_dir="/tmp/project",
-        server_dir=None,
-        started_at="2026-07-05T00:00:00+00:00",
-        workspace=None,
-        user_id=None,
-    )
+    defaults: dict[str, object] = {
+        "key": "abc123def456abcd",
+        "pid": os.getpid(),  # alive by default
+        "port": 54321,
+        "password": "secret",
+        "project_dir": "/tmp/project",
+        "server_dir": None,
+        "started_at": "2026-07-05T00:00:00+00:00",
+        "workspace": None,
+        "user_id": None,
+    }
     defaults.update(kwargs)
     return RegistryEntry(**defaults)  # type: ignore[arg-type]
 
@@ -278,8 +276,9 @@ def test_serve_duplicate_key_exits(tmp_path):
 
 def test_serve_stale_entry_cleaned_and_restarted(tmp_path):
     """Dead PID in registry — serve should clean it up and start fresh."""
-    from opencode_runtime.server import _compute_runtime_key
     from pathlib import Path
+
+    from opencode_runtime.server import _compute_runtime_key
 
     # Compute the same key serve will use
     key = _compute_runtime_key(

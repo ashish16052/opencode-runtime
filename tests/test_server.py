@@ -10,12 +10,11 @@ from pathlib import Path
 
 import pytest
 
-import opencode_runtime.registry as registry
-from opencode_runtime import process
+from opencode_runtime import process, registry
 from opencode_runtime.server import (
     ServerManager,
-    _ManagedServer,
     _compute_runtime_key,
+    _ManagedServer,
 )
 
 
@@ -640,7 +639,7 @@ class TestGetOrStartConcurrency:
         monkeypatch.setattr(ServerManager, "_start", always_fails)
         manager = ServerManager()
 
-        with pytest.raises(Exception):
+        with pytest.raises(Exception):  # noqa: B017
             await asyncio.gather(
                 manager.get_or_start(
                     key=key,
