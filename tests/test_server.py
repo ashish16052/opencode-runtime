@@ -12,7 +12,6 @@ import pytest
 
 import opencode_runtime.registry as registry
 from opencode_runtime import process
-from opencode_runtime.registry import ServerState
 from opencode_runtime.server import (
     ServerManager,
     _ManagedServer,
@@ -317,14 +316,12 @@ class TestServerManagerRegistry:
         registry.write(
             RegistryEntry(
                 key=key,
-                state=ServerState.RUNNING,
                 pid=99999999,
                 port=54321,
                 password="stale",
                 project_dir=str(tmp_path),
                 server_dir=None,
                 started_at=timestamp,
-                claimed_at=timestamp,
             )
         )
 
@@ -529,14 +526,12 @@ class TestServerManagerQuery:
         registry.write(
             RegistryEntry(
                 key=key,
-                state=ServerState.RUNNING,
                 pid=99999999,
                 port=54321,
                 password="x",
                 project_dir=str(tmp_path),
                 server_dir=None,
                 started_at=timestamp,
-                claimed_at=timestamp,
             )
         )
         was_alive = await ServerManager().stop(key)
@@ -559,14 +554,12 @@ class TestGetOrStartConcurrency:
             registry.write(
                 RegistryEntry(
                     key=key,
-                    state=ServerState.RUNNING,
                     pid=os.getpid(),
                     port=port,
                     password=password,
                     project_dir=str(tmp_path),
                     server_dir=None,
                     started_at=timestamp,
-                    claimed_at=timestamp,
                 )
             )
             return _ManagedServer(key=key, process=None, client=None, server_dir=None)  # type: ignore[arg-type]
