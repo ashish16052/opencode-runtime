@@ -9,7 +9,7 @@ No model or agent calls — no API keys required.
 import pytest
 
 import opencode_runtime.registry as registry
-from opencode_runtime import OpenCodeRuntime
+from opencode_runtime import OpenCodeRuntime, process
 
 pytestmark = pytest.mark.asyncio
 
@@ -45,7 +45,7 @@ class TestRuntimeLifecycle:
         await r.session()
         entries = registry.list_all()
         assert len(entries) == 1
-        assert registry.is_alive(entries[0].pid)
+        assert process.is_alive(entries[0].pid)
         await r.close()
 
     async def test_client_reachable_after_start(self, runtime):
