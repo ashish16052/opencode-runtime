@@ -55,6 +55,7 @@ def start_time(pid: int | None) -> str | None:
             capture_output=True,
             text=True,
             timeout=3.0,
+            check=False,
         )
     except (OSError, subprocess.SubprocessError):
         return None

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import types
 import typing as t
 from pathlib import Path
+
+from typing_extensions import Self
 
 from .server import ServerManager, _compute_runtime_key
 
@@ -54,10 +57,15 @@ class OpenCodeRuntime:
     # Lifecycle
     # ------------------------------------------------------------------
 
-    async def __aenter__(self) -> OpenCodeRuntime:
+    async def __aenter__(self) -> Self:
         return self
 
-    async def __aexit__(self, exc_type: t.Any, exc: t.Any, tb: t.Any) -> None:
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: types.TracebackType | None,
+    ) -> None:
         await self.close()
 
     async def close(self) -> None:
