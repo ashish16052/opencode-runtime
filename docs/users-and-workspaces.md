@@ -72,7 +72,7 @@ async with OpenCodeRuntime(runtime_dir=".opencode-runtime") as r:
     )
 ```
 
-Different `config` or `materials` produce different server keys — so `acme/alice` and `hobby/bob` run on entirely separate server processes even if `project_dir` is the same.
+`acme/alice` and `hobby/bob` have different workspaces, so they always get separate servers with separate history.
 
 ## Point each tenant at their own repo
 
@@ -120,6 +120,6 @@ Each server runs as a separate OS process with its own isolated directory under 
         └── tmp/
 ```
 
-No server can read another's home, config, or history. The directory name is a hash of `(workspace, user_id, project_dir, materials, config)` — same inputs always produce the same directory, so servers survive restarts and resume where they left off.
+No server can read another's home, config, or history. Servers survive restarts and resume where they left off.
 
 Isolation is at the process and filesystem level. If your use case allows users to run arbitrary shell commands via the `bash` tool, run each server in its own container for a stronger boundary.

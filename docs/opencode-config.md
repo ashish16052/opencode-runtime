@@ -61,7 +61,7 @@ async with OpenCodeRuntime(project_dir="/path/to/repo") as r:
 
 ## runtime_dir
 
-When set, each server gets its own isolated `HOME` and config file (`opencode.json`) under `runtime_dir/servers/<key>/`. Without it, OpenCode uses your real user environment and any `config` or `materials` passed to the runtime are ignored.
+When set, each server gets its own isolated environment under `runtime_dir`. Without it, OpenCode uses your real user environment and any `config` or `materials` passed to the runtime are ignored.
 
 ```python
 async with OpenCodeRuntime(runtime_dir=".opencode-runtime") as r:
@@ -91,4 +91,4 @@ async with OpenCodeRuntime(
     print(response.text)
 ```
 
-Note: `config` and `materials` affect server identity — different values produce a separate server process. `env` does not; if the server is already running, a different `env` passed to `session()` has no effect.
+`config`, `materials`, and `env` are applied when the server starts. Changes take effect only after the server is restarted.
