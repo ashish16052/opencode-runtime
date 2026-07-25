@@ -20,42 +20,32 @@ from opencode_runtime.server import (
 
 class TestComputeRuntimeKey:
     def test_same_inputs_produce_same_key(self, tmp_path):
-        k1 = _compute_runtime_key("acme", "u_1", tmp_path, None, {})
-        k2 = _compute_runtime_key("acme", "u_1", tmp_path, None, {})
+        k1 = _compute_runtime_key("acme", "u_1", tmp_path)
+        k2 = _compute_runtime_key("acme", "u_1", tmp_path)
         assert k1 == k2
 
     def test_different_workspace_different_key(self, tmp_path):
-        k1 = _compute_runtime_key("acme", "u_1", tmp_path, None, {})
-        k2 = _compute_runtime_key("beta", "u_1", tmp_path, None, {})
+        k1 = _compute_runtime_key("acme", "u_1", tmp_path)
+        k2 = _compute_runtime_key("beta", "u_1", tmp_path)
         assert k1 != k2
 
     def test_different_user_different_key(self, tmp_path):
-        k1 = _compute_runtime_key("acme", "u_1", tmp_path, None, {})
-        k2 = _compute_runtime_key("acme", "u_2", tmp_path, None, {})
-        assert k1 != k2
-
-    def test_different_config_different_key(self, tmp_path):
-        k1 = _compute_runtime_key(None, None, tmp_path, None, {"model": "a"})
-        k2 = _compute_runtime_key(None, None, tmp_path, None, {"model": "b"})
-        assert k1 != k2
-
-    def test_different_materials_different_key(self, tmp_path):
-        k1 = _compute_runtime_key(None, None, tmp_path, "./mat/a", {})
-        k2 = _compute_runtime_key(None, None, tmp_path, "./mat/b", {})
+        k1 = _compute_runtime_key("acme", "u_1", tmp_path)
+        k2 = _compute_runtime_key("acme", "u_2", tmp_path)
         assert k1 != k2
 
     def test_none_workspace_and_user_stable(self, tmp_path):
         """No workspace/user → still produces a stable key (default server)."""
-        k1 = _compute_runtime_key(None, None, tmp_path, None, {})
-        k2 = _compute_runtime_key(None, None, tmp_path, None, {})
+        k1 = _compute_runtime_key(None, None, tmp_path)
+        k2 = _compute_runtime_key(None, None, tmp_path)
         assert k1 == k2
 
     def test_key_is_16_chars(self, tmp_path):
-        key = _compute_runtime_key("acme", "u_1", tmp_path, None, {})
+        key = _compute_runtime_key("acme", "u_1", tmp_path)
         assert len(key) == 16
 
     def test_key_is_hex(self, tmp_path):
-        key = _compute_runtime_key("acme", "u_1", tmp_path, None, {})
+        key = _compute_runtime_key("acme", "u_1", tmp_path)
         int(key, 16)  # raises if not valid hex
 
 
@@ -85,7 +75,7 @@ class TestManagedServer:
 class TestServerManager:
     async def test_get_or_start_starts_server(self, tmp_path):
         manager = ServerManager()
-        key = _compute_runtime_key(None, None, tmp_path, None, {})
+        key = _compute_runtime_key(None, None, tmp_path)
         server = await manager.get_or_start(
             key=key,
             project_dir=tmp_path,
@@ -103,7 +93,7 @@ class TestServerManager:
     async def test_same_key_reuses_server(self, tmp_path):
         """Same key → same server (same port in registry)."""
         manager = ServerManager()
-        key = _compute_runtime_key(None, None, tmp_path, None, {})
+        key = _compute_runtime_key(None, None, tmp_path)
         s1 = await manager.get_or_start(
             key=key,
             project_dir=tmp_path,
@@ -125,8 +115,8 @@ class TestServerManager:
 
     async def test_different_key_starts_different_server(self, tmp_path):
         manager = ServerManager()
-        k1 = _compute_runtime_key("acme", None, tmp_path, None, {})
-        k2 = _compute_runtime_key("beta", None, tmp_path, None, {})
+        k1 = _compute_runtime_key("acme", None, tmp_path)
+        k2 = _compute_runtime_key("beta", None, tmp_path)
         s1 = await manager.get_or_start(
             key=k1,
             project_dir=tmp_path,
@@ -148,8 +138,8 @@ class TestServerManager:
 
     async def test_stop_all_terminates_all(self, tmp_path):
         manager = ServerManager()
-        k1 = _compute_runtime_key("acme", None, tmp_path, None, {})
-        k2 = _compute_runtime_key("beta", None, tmp_path, None, {})
+        k1 = _compute_runtime_key("acme", None, tmp_path)
+        k2 = _compute_runtime_key("beta", None, tmp_path)
         e1_before = None
         e2_before = None
         await manager.get_or_start(
@@ -182,7 +172,7 @@ class TestServerManager:
 
     async def test_server_dir_created(self, tmp_path):
         manager = ServerManager()
-        key = _compute_runtime_key(None, None, tmp_path, None, {})
+        key = _compute_runtime_key(None, None, tmp_path)
         server_dir = tmp_path / "srv"
         await manager.get_or_start(
             key=key,
@@ -200,8 +190,8 @@ class TestServerManager:
     async def test_stop_single_server(self, tmp_path):
         """stop(key) terminates one server, leaves others running."""
         manager = ServerManager()
-        k1 = _compute_runtime_key("acme", None, tmp_path, None, {})
-        k2 = _compute_runtime_key("beta", None, tmp_path, None, {})
+        k1 = _compute_runtime_key("acme", None, tmp_path)
+        k2 = _compute_runtime_key("beta", None, tmp_path)
         await manager.get_or_start(
             key=k1,
             project_dir=tmp_path,
@@ -240,7 +230,7 @@ class TestServerManagerRegistry:
     async def test_start_writes_registry_entry(self, tmp_path, monkeypatch):
         monkeypatch.setattr(registry, "REGISTRY_DIR", tmp_path / "reg")
         manager = ServerManager()
-        key = _compute_runtime_key(None, None, tmp_path, None, {})
+        key = _compute_runtime_key(None, None, tmp_path)
         server = await manager.get_or_start(
             key=key,
             project_dir=tmp_path,
@@ -258,7 +248,7 @@ class TestServerManagerRegistry:
     async def test_stop_deletes_registry_entry(self, tmp_path, monkeypatch):
         monkeypatch.setattr(registry, "REGISTRY_DIR", tmp_path / "reg")
         manager = ServerManager()
-        key = _compute_runtime_key(None, None, tmp_path, None, {})
+        key = _compute_runtime_key(None, None, tmp_path)
         await manager.get_or_start(
             key=key,
             project_dir=tmp_path,
@@ -273,7 +263,7 @@ class TestServerManagerRegistry:
     async def test_attaches_to_alive_registry_entry(self, tmp_path, monkeypatch):
         monkeypatch.setattr(registry, "REGISTRY_DIR", tmp_path / "reg")
         manager1 = ServerManager()
-        key = _compute_runtime_key(None, None, tmp_path, None, {})
+        key = _compute_runtime_key(None, None, tmp_path)
         s1 = await manager1.get_or_start(
             key=key,
             project_dir=tmp_path,
@@ -310,7 +300,7 @@ class TestServerManagerRegistry:
         # Write a stale entry with a dead PID
         from opencode_runtime.registry import RegistryEntry, now_iso
 
-        key = _compute_runtime_key(None, None, tmp_path, None, {})
+        key = _compute_runtime_key(None, None, tmp_path)
         timestamp = now_iso()
         registry.write(
             RegistryEntry(
@@ -344,7 +334,7 @@ class TestServerManagerRegistry:
     async def test_start_stores_workspace_and_user_id(self, tmp_path, monkeypatch):
         monkeypatch.setattr(registry, "REGISTRY_DIR", tmp_path / "reg")
         manager = ServerManager()
-        key = _compute_runtime_key("org_a", "u_1", tmp_path, None, {})
+        key = _compute_runtime_key("org_a", "u_1", tmp_path)
         await manager.get_or_start(
             key=key,
             project_dir=tmp_path,
@@ -365,7 +355,7 @@ class TestServerManagerRegistry:
         """If registry entry is deleted externally, next call starts a fresh server."""
         monkeypatch.setattr(registry, "REGISTRY_DIR", tmp_path / "reg")
         manager = ServerManager()
-        key = _compute_runtime_key(None, None, tmp_path, None, {})
+        key = _compute_runtime_key(None, None, tmp_path)
         s1 = await manager.get_or_start(
             key=key,
             project_dir=tmp_path,
@@ -405,7 +395,7 @@ class TestServerManagerQuery:
     async def test_find_returns_entry(self, tmp_path, monkeypatch):
         monkeypatch.setattr(registry, "REGISTRY_DIR", tmp_path / "reg")
         manager = ServerManager()
-        key = _compute_runtime_key(None, None, tmp_path, None, {})
+        key = _compute_runtime_key(None, None, tmp_path)
         await manager.get_or_start(
             key=key,
             project_dir=tmp_path,
@@ -426,7 +416,7 @@ class TestServerManagerQuery:
     async def test_is_alive_true_for_running(self, tmp_path, monkeypatch):
         monkeypatch.setattr(registry, "REGISTRY_DIR", tmp_path / "reg")
         manager = ServerManager()
-        key = _compute_runtime_key(None, None, tmp_path, None, {})
+        key = _compute_runtime_key(None, None, tmp_path)
         await manager.get_or_start(
             key=key,
             project_dir=tmp_path,
@@ -445,8 +435,8 @@ class TestServerManagerQuery:
     async def test_list_returns_entries_with_liveness(self, tmp_path, monkeypatch):
         monkeypatch.setattr(registry, "REGISTRY_DIR", tmp_path / "reg")
         manager = ServerManager()
-        k1 = _compute_runtime_key("acme", None, tmp_path, None, {})
-        k2 = _compute_runtime_key("beta", None, tmp_path, None, {})
+        k1 = _compute_runtime_key("acme", None, tmp_path)
+        k2 = _compute_runtime_key("beta", None, tmp_path)
         await manager.get_or_start(
             key=k1,
             project_dir=tmp_path,
@@ -476,7 +466,7 @@ class TestServerManagerQuery:
     async def test_health_returns_healthy(self, tmp_path, monkeypatch):
         monkeypatch.setattr(registry, "REGISTRY_DIR", tmp_path / "reg")
         manager = ServerManager()
-        key = _compute_runtime_key(None, None, tmp_path, None, {})
+        key = _compute_runtime_key(None, None, tmp_path)
         await manager.get_or_start(
             key=key,
             project_dir=tmp_path,
@@ -499,7 +489,7 @@ class TestServerManagerQuery:
     async def test_stop_returns_true_when_alive(self, tmp_path, monkeypatch):
         monkeypatch.setattr(registry, "REGISTRY_DIR", tmp_path / "reg")
         manager = ServerManager()
-        key = _compute_runtime_key(None, None, tmp_path, None, {})
+        key = _compute_runtime_key(None, None, tmp_path)
         await manager.get_or_start(
             key=key,
             project_dir=tmp_path,
@@ -520,7 +510,7 @@ class TestServerManagerQuery:
         from opencode_runtime.registry import RegistryEntry, now_iso
 
         monkeypatch.setattr(registry, "REGISTRY_DIR", tmp_path / "reg")
-        key = _compute_runtime_key(None, None, tmp_path, None, {})
+        key = _compute_runtime_key(None, None, tmp_path)
         timestamp = now_iso()
         registry.write(
             RegistryEntry(
@@ -567,7 +557,7 @@ class TestGetOrStartConcurrency:
 
     async def test_concurrent_get_or_start_calls_start_once(self, tmp_path, monkeypatch):
         monkeypatch.setattr(registry, "REGISTRY_DIR", tmp_path / "reg")
-        key = _compute_runtime_key(None, None, tmp_path, None, {})
+        key = _compute_runtime_key(None, None, tmp_path)
         calls: list[int] = []
         monkeypatch.setattr(ServerManager, "_start", self._fake_start(key, tmp_path, 0.2, calls))
         manager = ServerManager()
@@ -590,7 +580,7 @@ class TestGetOrStartConcurrency:
 
     async def test_failed_start_deletes_claim_for_retry(self, tmp_path, monkeypatch):
         monkeypatch.setattr(registry, "REGISTRY_DIR", tmp_path / "reg")
-        key = _compute_runtime_key(None, None, tmp_path, None, {})
+        key = _compute_runtime_key(None, None, tmp_path)
         calls: list[int] = []
         succeeding_start = self._fake_start(key, tmp_path, 0.0, calls)
 
@@ -631,7 +621,7 @@ class TestGetOrStartConcurrency:
         """A caller waiting on someone else's claim should fail fast, not
         hang for the full timeout, once that claim disappears."""
         monkeypatch.setattr(registry, "REGISTRY_DIR", tmp_path / "reg")
-        key = _compute_runtime_key(None, None, tmp_path, None, {})
+        key = _compute_runtime_key(None, None, tmp_path)
 
         async def always_fails(_self, **kwargs):
             raise RuntimeError("boom")

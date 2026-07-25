@@ -1,9 +1,10 @@
 """
 Multi-tenant tests against the real opencode binary.
 
-Verifies that different workspace/user/config/materials combinations
-produce isolated server processes, and that same combinations reuse
-the same server.
+Verifies that different workspace/user combinations produce isolated server
+processes, and that same combinations reuse the same server. Config and
+materials are not part of server identity — different values for the same
+(workspace, user_id, project_dir) reuse the same server.
 
 No model or agent calls — no API keys required.
 """
@@ -51,13 +52,13 @@ class TestWorkspaceIsolation:
         s2 = await runtime.session(workspace="acme", user_id="u_1")
         assert s1.raw_client.base_url == s2.raw_client.base_url
 
-    async def test_different_config_gets_different_server(self, runtime):
-        """Same workspace, different config → different server."""
+    async def test_different_config_reuses_server(self, runtime):
+        """Same workspace, different config → same server (config is not identity)."""
         s1 = await runtime.session(workspace="acme", config={"model": "anthropic/claude-haiku-4-5"})
         s2 = await runtime.session(
             workspace="acme", config={"model": "anthropic/claude-sonnet-4-5"}
         )
-        assert s1.raw_client.base_url != s2.raw_client.base_url
+        assert s1.raw_client.base_url == s2.raw_client.base_url
 
 
 class TestServerDirs:
@@ -92,8 +93,8 @@ class TestStopBehaviour:
             await r.session(workspace="acme")
             await r.session(workspace="beta")
 
-            acme_key = _compute_runtime_key("acme", None, Path(tmp_path), None, {})
-            beta_key = _compute_runtime_key("beta", None, Path(tmp_path), None, {})
+            acme_key = _compute_runtime_key("acme", None, Path(tmp_path))
+            beta_key = _compute_runtime_key("beta", None, Path(tmp_path))
 
             acme_entry = registry.read(acme_key)
             beta_entry = registry.read(beta_key)

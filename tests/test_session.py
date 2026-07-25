@@ -48,8 +48,8 @@ class TestSessionFactory:
         session = await runtime.session(config={"model": "test/model"})
         assert session.config["model"] == "test/model"
 
-    async def test_session_materials_override_gets_separate_server(self, tmp_path):
-        """Per-session materials → different runtime key → different server."""
+    async def test_session_materials_override_reuses_server(self, tmp_path):
+        """Per-session materials → same runtime key → same server (materials are not identity)."""
         mat_dir = tmp_path / "materials"
         mat_dir.mkdir()
         (mat_dir / "AGENTS.md").write_text("# agents")
@@ -60,8 +60,8 @@ class TestSessionFactory:
         ) as r:
             s1 = await r.session()
             s2 = await r.session(materials=str(mat_dir))
-            # Different materials → different key → different server/client
-            assert s1.raw_client.base_url != s2.raw_client.base_url
+            # Different materials → same key → same server/client
+            assert s1.raw_client.base_url == s2.raw_client.base_url
 
 
 class TestOpenCodeSession:

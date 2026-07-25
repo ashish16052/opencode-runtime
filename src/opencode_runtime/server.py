@@ -150,27 +150,13 @@ def _compute_runtime_key(
     workspace: str | None,
     user_id: str | None,
     project_dir: Path,
-    materials: Materials,
-    config: dict[str, Any],
 ) -> str:
-    """Compute a stable 16-char key for a unique server configuration.
-
-    Same inputs always produce the same key. Different inputs (different
-    workspace, user, materials, or config) produce different keys and
-    therefore get separate server processes.
-    """
+    """Compute a stable key from (workspace, user_id, project_dir)."""
     payload = "|".join(
         [
             workspace or "",
             user_id or "",
             str(project_dir),
-            repr(
-                sorted(
-                    str(m)
-                    for m in (materials if isinstance(materials, list) else [materials or ""])
-                )
-            ),
-            json.dumps(config, sort_keys=True, default=str),
         ]
     )
     return hashlib.sha256(payload.encode()).hexdigest()[:16]
@@ -179,9 +165,9 @@ def _compute_runtime_key(
 class ServerManager:
     """Manages a pool of OpenCode instance processes.
 
-    Each unique combination of workspace, user_id, project_dir, materials,
-    and config gets its own isolated OpenCode instance. Instances are started
-    on demand and reused when the same key is requested again.
+    Each unique combination of workspace, user_id, and project_dir gets its
+    own isolated OpenCode instance. Instances are started on demand and
+    reused when the same key is requested again.
 
     The registry is the single source of truth for server state — there is
     no in-memory cache of it, so every call consults the registry and

@@ -281,9 +281,7 @@ def test_serve_stale_entry_cleaned_and_restarted(tmp_path):
     from opencode_runtime.server import _compute_runtime_key
 
     # Compute the same key serve will use
-    key = _compute_runtime_key(
-        workspace=None, user_id=None, project_dir=Path(tmp_path), materials=None, config={}
-    )
+    key = _compute_runtime_key(workspace=None, user_id=None, project_dir=Path(tmp_path))
     registry.write(make_entry(key=key, pid=99999999, project_dir=str(tmp_path)))
 
     args = ns(

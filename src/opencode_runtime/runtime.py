@@ -95,9 +95,7 @@ class OpenCodeRuntime:
     ) -> OpenCodeSession:
         """Create a session backed by this runtime.
 
-        Each unique combination of workspace, user_id, materials, and config
-        maps to a dedicated OpenCode instance process. The instance is started
-        on first use and reused for subsequent sessions with the same key.
+        The instance is started on first use and reused for subsequent calls.
 
         Args:
             workspace:   Logical tenant/workspace name, e.g. ``"acme"``.
@@ -119,8 +117,6 @@ class OpenCodeRuntime:
             workspace,
             user_id,
             self.project_dir,
-            effective_materials,
-            effective_config,
         )
 
         server_dir = self.runtime_dir / "servers" / key if self.runtime_dir is not None else None

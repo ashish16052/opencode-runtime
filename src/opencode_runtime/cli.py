@@ -100,8 +100,6 @@ async def _serve(args: argparse.Namespace) -> None:
         workspace=args.workspace,
         user_id=args.user_id,
         project_dir=project_dir,
-        materials=materials,
-        config={},
     )
 
     manager = ServerManager()
